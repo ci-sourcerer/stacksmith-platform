@@ -1,0 +1,95 @@
+description: Validation tests for the AWS serverless example.
+
+var_validations:
+  function_name:
+    - name: Accepts a valid Lambda name
+      value: serverless-reader
+      expect: pass
+    - name: Rejects spaces
+      value: serverless reader
+      expect: fail
+  role_name:
+    - name: Accepts a valid role name
+      value: serverless-reader-execution
+      expect: pass
+    - name: Rejects a path
+      value: service/reader
+      expect: fail
+  image_uri:
+    - name: Accepts a tagged image
+      value: public.ecr.aws/lambda/python:3.14
+      expect: pass
+    - name: Rejects an untagged image
+      value: public.ecr.aws/lambda/python
+      expect: fail
+  policy_arn:
+    - name: Accepts AWS ReadOnlyAccess
+      value: arn:aws:iam::aws:policy/ReadOnlyAccess
+      expect: pass
+    - name: Rejects a role ARN
+      value: arn:aws:iam::123456789012:role/example
+      expect: fail
+
+plan_validations:
+  iam_role_trusts_only_lambda:
+    - name: Accepts Lambda service trust
+      resources:
+        - type: aws_iam_role
+          after:
+            assume_role_policy:
+              Version: "2012-10-17"
+              Statement:
+                - Effect: Allow
+                  Action: sts:AssumeRole
+                  Principal:
+                    Service: lambda.amazonaws.com
+      expect: pass
+    - name: Rejects wildcard trust
+      resources:
+        - type: aws_iam_role
+          after:
+            assume_role_policy:
+              Statement:
+                - Effect: Allow
+                  Action: sts:AssumeRole
+                  Principal: "*"
+      expect: fail
+  iam_role_session_is_limited:
+    - name: Accepts a one-hour session
+      resources:
+        - type: aws_iam_role
+          after:
+            max_session_duration: 3600
+      expect: pass
+    - name: Rejects a twelve-hour session
+      resources:
+        - type: aws_iam_role
+          after:
+            max_session_duration: 43200
+      expect: fail
+  lambda_uses_arm64:
+    - name: Accepts arm64
+      resources:
+        - type: aws_lambda_function
+          after:
+            architectures: [arm64]
+      expect: pass
+    - name: Rejects x86_64
+      resources:
+        - type: aws_lambda_function
+          after:
+            architectures: [x86_64]
+      expect: fail
+  lambda_timeout_is_bounded:
+    - name: Accepts a short timeout
+      resources:
+        - type: aws_lambda_function
+          after:
+            timeout: 15
+      expect: pass
+    - name: Rejects a long timeout
+      resources:
+        - type: aws_lambda_function
+          after:
+            timeout: 120
+      expect: fail

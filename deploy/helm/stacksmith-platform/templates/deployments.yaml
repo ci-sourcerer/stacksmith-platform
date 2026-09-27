@@ -1,0 +1,53 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ .Release.Name }}-api
+spec:
+  replicas: {{ .Values.apiReplicas }}
+  selector:
+    matchLabels: {app: "{{ .Release.Name }}", role: api}
+  template:
+    metadata:
+      labels: {app: "{{ .Release.Name }}", role: api}
+    spec:
+      serviceAccountName: {{ default (printf "%s-api" .Release.Name) .Values.serviceAccounts.api.name }}
+      automountServiceAccountToken: true
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        runAsGroup: 10001
+        fsGroup: 10001
+        seccompProfile: {type: RuntimeDefault}
+      containers:
+        - name: api
+          image: {{ .Values.image | quote }}
+          imagePullPolicy: {{ .Values.imagePullPolicy }}
+          command: [stacksmith-platform]
+          envFrom:
+            - secretRef: {name: {{ .Values.configSecret }}}
+            - secretRef: {name: {{ .Values.apiDatabaseSecret }}}
+          env:
+            - {name: FORWARDED_ALLOW_IPS, value: {{ .Values.forwardedAllowIps | quote }}}
+            {{- include "stacksmith.executionEnv" . | nindent 12 }}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: {drop: [ALL]}
+          resources: {{ .Values.resources.api | toYaml | nindent 12 }}
+          volumeMounts:
+            - {name: tmp, mountPath: /tmp}
+          ports: [{name: http, containerPort: 8000}]
+          readinessProbe:
+            httpGet:
+              path: /api/ready
+              port: http
+              httpHeaders: [{name: Host, value: "127.0.0.1"}]
+            initialDelaySeconds: 5
+          livenessProbe:
+            httpGet:
+              path: /api/health
+              port: http
+              httpHeaders: [{name: Host, value: "127.0.0.1"}]
+            initialDelaySeconds: 10
+      volumes:
+        - {name: tmp, emptyDir: {sizeLimit: 256Mi}}

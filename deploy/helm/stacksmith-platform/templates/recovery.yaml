@@ -1,0 +1,47 @@
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: {{ .Release.Name }}-recovery
+spec:
+  schedule: "* * * * *"
+  concurrencyPolicy: Forbid
+  startingDeadlineSeconds: 50
+  successfulJobsHistoryLimit: 1
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      backoffLimit: 0
+      activeDeadlineSeconds: 120
+      ttlSecondsAfterFinished: 86400
+      template:
+        metadata:
+          labels: {app: {{ .Release.Name | quote }}, role: recovery}
+        spec:
+          restartPolicy: Never
+          serviceAccountName: {{ default (printf "%s-supervisor" .Release.Name) .Values.serviceAccounts.supervisor.name }}
+          automountServiceAccountToken: true
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 10001
+            runAsGroup: 10001
+            fsGroup: 10001
+            seccompProfile: {type: RuntimeDefault}
+          containers:
+            - name: recovery
+              image: {{ .Values.image | quote }}
+              imagePullPolicy: {{ .Values.imagePullPolicy }}
+              command: [stacksmith-platform-maintain]
+              envFrom:
+                - secretRef: {name: {{ .Values.configSecret }}}
+                - secretRef: {name: {{ .Values.supervisorDatabaseSecret }}}
+              env:
+                {{- include "stacksmith.executionEnv" . | nindent 16 }}
+              securityContext:
+                allowPrivilegeEscalation: false
+                readOnlyRootFilesystem: true
+                capabilities: {drop: [ALL]}
+              resources: {{ .Values.recovery.resources | toYaml | nindent 16 }}
+              volumeMounts:
+                - {name: tmp, mountPath: /tmp}
+          volumes:
+            - {name: tmp, emptyDir: {sizeLimit: 256Mi}}

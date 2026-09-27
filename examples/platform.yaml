@@ -1,0 +1,221 @@
+description: AWS serverless platform with managed identity and policy associations.
+backend:
+  data:
+    type: local
+    path: .stacksmith/terraform.tfstate
+
+provider_mappings:
+  aws:
+    source:
+      source: registry
+      data:
+        address: hashicorp/aws
+        version: "= 6.39.0"
+    instances:
+      default:
+        description: Example AWS provider configured for offline-friendly planning.
+        config:
+          data:
+            region: us-east-1
+            skip_credentials_validation: true
+            skip_metadata_api_check: true
+            skip_requesting_account_id: true
+
+var_validations:
+  function_name:
+    description: Require a valid Lambda function name of at most 64 characters.
+    inline: |
+      import re
+
+      def validate(value, **context):
+          return (
+              "pass"
+              if isinstance(value, str)
+              and bool(re.fullmatch(r"[A-Za-z0-9_-]{1,64}", value))
+              else "fail"
+          )
+  role_name:
+    description: Require a valid IAM role name of at most 64 characters.
+    inline: |
+      import re
+
+      def validate(value, **context):
+          return (
+              "pass"
+              if isinstance(value, str)
+              and bool(re.fullmatch(r"[A-Za-z0-9+=,.@_-]{1,64}", value))
+              else "fail"
+          )
+  image_uri:
+    description: Require a tagged ECR-style container image URI.
+    inline: |
+      import re
+
+      def validate(value, **context):
+          return (
+              "pass"
+              if isinstance(value, str)
+              and bool(re.fullmatch(r"[A-Za-z0-9._/-]+:[A-Za-z0-9._-]+", value))
+              else "fail"
+          )
+  policy_arn:
+    description: Require an AWS IAM managed-policy ARN.
+    inline: |
+      import re
+
+      def validate(value, **context):
+          return (
+              "pass"
+              if isinstance(value, str)
+              and bool(
+                  re.fullmatch(
+                      r"arn:aws(?:-[a-z]+)?:iam::(?:aws|[0-9]{12}):policy/.+",
+                      value,
+                  )
+              )
+              else "fail"
+          )
+
+plan_validations:
+  iam_role_trusts_only_lambda:
+    description: Require IAM roles to trust only the Lambda service.
+    rule:
+      script:
+        source: local
+        data:
+          path: validations/validate_iam_role_trust.py
+  iam_role_session_is_limited:
+    description: Limit IAM role sessions to one hour.
+    rule:
+      script:
+        source: local
+        data:
+          path: validations/validate_iam_role_session.py
+  lambda_uses_arm64:
+    description: Require Lambda functions to use the arm64 architecture.
+    rule:
+      script:
+        source: local
+        data:
+          path: validations/validate_lambda_architecture.py
+  lambda_timeout_is_bounded:
+    description: Limit Lambda function timeouts to 30 seconds.
+    rule:
+      script:
+        source: local
+        data:
+          path: validations/validate_lambda_timeout.py
+
+associations:
+  lambda-execution-role:
+    description: Supply the platform-approved execution role to Lambda functions.
+    producers:
+      select: component_type == 'aws_iam_role' && tag.lambda_execution
+      cardinality: exactly_one
+    consumers:
+      select: component_type == 'aws_lambda_function'
+    bindings:
+      - output: arn
+        property: role_arn
+        merge: set_if_absent
+  role-baseline-policies:
+    description: Attach baseline Lambda policies to execution roles.
+    producers:
+      select: component_type == 'aws_iam_policy' && tag.lambda_baseline
+      cardinality: one_or_more
+    consumers:
+      select: component_type == 'aws_iam_role' && tag.lambda_execution
+    bindings:
+      - output: arn
+        property: policy_arns
+        merge: append
+
+module_mappings:
+  aws_lambda_function:
+    description: AWS Lambda function
+    tags: [compute, aws]
+    source:
+      source: git
+      data:
+        repo: https://github.com/ci-sourcerer/stacksmith-example-aws-modules.git
+        ref: v0.1.0
+        path: lambda
+    auto_inject_inputs: true
+    properties:
+      function_name:
+        description: Stable Lambda function name.
+      role_arn:
+        description: IAM execution role supplied by the managed association.
+      image_uri:
+        description: Tagged container image URI used by the function.
+      architecture:
+        description: Lambda instruction-set architecture.
+      memory_size:
+        description: Function memory in MiB.
+      timeout:
+        description: Maximum invocation duration in seconds.
+      environment_variables:
+        description: Non-secret environment variables for the function.
+    outputs:
+      arn:
+        description: Lambda function ARN.
+      function_name:
+        description: Deployed Lambda function name.
+  aws_iam_role:
+    description: AWS IAM execution role
+    tags: [identity, aws]
+    source:
+      source: git
+      data:
+        repo: https://github.com/ci-sourcerer/stacksmith-example-aws-modules.git
+        ref: v0.1.0
+        path: iam-role
+    auto_inject_inputs: true
+    properties:
+      role_name:
+        description: Stable IAM role name.
+      trusted_service:
+        description: AWS service principal allowed to assume this role.
+      policy_arns:
+        description: Managed policy ARNs attached manually and by associations.
+    outputs:
+      arn:
+        description: IAM role ARN supplied to workloads.
+      name:
+        description: IAM role name.
+  aws_iam_policy:
+    description: Customer-managed IAM policy
+    tags: [identity, aws]
+    source:
+      source: git
+      data:
+        repo: https://github.com/ci-sourcerer/stacksmith-example-aws-modules.git
+        ref: v0.1.0
+        path: iam-policy
+    auto_inject_inputs: true
+    properties:
+      name:
+        description: Stable customer-managed policy name.
+      description:
+        description: Human-readable policy purpose.
+      policy_statements:
+        description: IAM policy statements encoded by the module.
+    outputs:
+      arn:
+        description: Customer-managed policy ARN.
+  aws_managed_policy:
+    description: AWS-managed IAM policy reference
+    tags: [identity, aws]
+    source:
+      source: git
+      data:
+        repo: https://github.com/ci-sourcerer/stacksmith-example-aws-modules.git
+        ref: v0.1.0
+        path: managed-policy-reference
+    auto_inject_inputs: true
+    properties:
+      policy_arn:
+        description: ARN of an existing AWS-managed policy.
+    outputs:
+      arn:
+        description: Validated AWS-managed policy ARN.

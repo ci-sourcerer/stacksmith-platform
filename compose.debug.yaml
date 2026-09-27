@@ -1,0 +1,92 @@
+x-python-build: &python-build
+  context: .
+  dockerfile: .data/Dockerfile.api
+  target: debug
+  args:
+    PACKAGE_NAME: stacksmith_platform
+    PACKAGE_VERSION: ${STACKSMITH_BUILD_PACKAGE_VERSION:-0.0.0}
+    PYTHON_VERSION: ${STACKSMITH_BUILD_PYTHON_VERSION:-3.15}
+    UV_VERSION: ${STACKSMITH_BUILD_UV_VERSION:-latest}
+    NONROOT_UID: "10001"
+    NONROOT_GID: "10001"
+
+services:
+  adminer:
+    image: adminer:5.5.1-standalone
+    ports: ["127.0.0.1:${STACKSMITH_PLATFORM_ADMINER_PORT:-8081}:8080"]
+    environment:
+      ADMINER_DEFAULT_SERVER: postgres
+      ADMINER_DEFAULT_USERNAME: platform
+      ADMINER_DEFAULT_PASSWORD: ${STACKSMITH_PLATFORM_DB_PASSWORD}
+      ADMINER_DEFAULT_DB: ${STACKSMITH_PLATFORM_POSTGRES_DATABASE:-platform}
+    configs:
+      - source: adminer-index
+        target: /var/www/html/index.php
+    networks: [control, public]
+    depends_on:
+      postgres: {condition: service_healthy}
+  api:
+    image: ${STACKSMITH_PLATFORM_DEBUG_IMAGE:-stacksmith-platform:debug}
+    build: *python-build
+    working_dir: /tmp/build
+    entrypoint: [python, -Xfrozen_modules=off, -m, debugpy, --listen, "0.0.0.0:5678", -m, stacksmith_platform]
+    command: [--reload, --reload-dir, /tmp/build/src]
+    environment:
+      PYTHONPATH: /tmp/build/src
+    ports: ["127.0.0.1:${STACKSMITH_PLATFORM_DEBUG_PORT:-5678}:5678"]
+    # The debug stage contains the build context under /tmp/build. Preserve it
+    # rather than covering it with the production image's /tmp tmpfs.
+    tmpfs: !override []
+    read_only: false
+    develop:
+      watch:
+        - action: sync
+          path: ./src
+          target: /tmp/build/src
+        - action: rebuild
+          path: ./uv.lock
+        - action: rebuild
+          path: ./pyproject.toml
+  worker:
+    image: ${STACKSMITH_PLATFORM_DEBUG_IMAGE:-stacksmith-platform:debug}
+    build: *python-build
+    working_dir: /tmp/build
+    environment:
+      PYTHONPATH: /tmp/build/src
+    tmpfs: !override []
+    read_only: false
+    develop:
+      watch:
+        - action: sync+restart
+          path: ./src
+          target: /tmp/build/src
+        - action: rebuild
+          path: ./uv.lock
+        - action: rebuild
+          path: ./pyproject.toml
+  frontend:
+    read_only: false
+    image: ${STACKSMITH_PLATFORM_FRONTEND_DEBUG_IMAGE:-stacksmith-platform-frontend:debug}
+    build:
+      context: .
+      dockerfile: deploy/frontend.Dockerfile
+      target: development
+    environment:
+      STACKSMITH_PLATFORM_PUBLIC_URL: ${STACKSMITH_PLATFORM_PUBLIC_URL:-http://localhost:8000}
+    develop:
+      watch:
+        - action: sync
+          path: ./web
+          target: /web
+          ignore: [node_modules/, dist/, package.json, package-lock.json, vite.config.ts]
+        - action: sync+restart
+          path: ./web/vite.config.ts
+          target: /web/vite.config.ts
+        - action: rebuild
+          path: ./web/package.json
+        - action: rebuild
+          path: ./web/package-lock.json
+
+configs:
+  adminer-index:
+    file: ./deploy/adminer/index.php

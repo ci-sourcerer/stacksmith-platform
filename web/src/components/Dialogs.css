@@ -1,0 +1,126 @@
+.dialog-overlay {
+  position: fixed;
+  inset: 0;
+  background: #14251c99;
+  z-index: 2000;
+}
+
+.app-dialog {
+  position: fixed;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  z-index: 2001;
+  width: min(680px, calc(100vw - 32px));
+  max-height: calc(100dvh - 48px);
+  overflow: auto;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  padding: 24px;
+  background: var(--paper);
+  color: var(--foreground);
+  box-shadow: 0 24px 80px #101d2255;
+}
+
+.app-dialog h2 {
+  margin: 0;
+  font-size: 20px;
+}
+.dialog-heading {
+  display: flex;
+  justify-content: space-between;
+  gap: 16px;
+  align-items: start;
+}
+.dialog-description {
+  white-space: pre-line;
+  margin: 16px 0;
+}
+.dialog-footer {
+  display: flex;
+  justify-content: flex-end;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-top: 24px;
+}
+.app-dialog .button.danger {
+  background: #a6533e;
+  border-color: #a6533e;
+  color: #fff;
+}
+.app-dialog .button.danger:hover {
+  background: #85412f;
+}
+.app-dialog h2,
+.connection-preview h3 {
+  overflow-wrap: anywhere;
+}
+.connection-operations {
+  display: grid;
+  gap: 8px;
+  border: 0;
+  padding: 0;
+  margin: 20px 0;
+}
+.connection-operations legend {
+  font-weight: 600;
+  margin-bottom: 8px;
+}
+.connection-operation {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  cursor: pointer;
+}
+.connection-operation:has(input:checked) {
+  border-color: var(--green, #3d8076);
+  background: #3d807612;
+}
+.connection-fields {
+  display: grid;
+  gap: 12px;
+}
+.connection-fields label {
+  display: grid;
+  gap: 6px;
+}
+.connection-preview {
+  margin-top: 20px;
+  padding: 16px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+}
+.connection-preview h3 {
+  margin: 0 0 12px;
+  font-size: 15px;
+}
+.connection-preview pre {
+  max-height: 180px;
+  overflow: auto;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.connection-warning {
+  color: #a6533e;
+}
+.dark .connection-warning {
+  color: #efa88e;
+}
+.app-dialog select,
+.app-dialog input[type="text"] {
+  width: 100%;
+}
+.app-dialog :focus-visible {
+  outline: 2px solid #3d8076;
+  outline-offset: 3px;
+}
+
+@media (max-width: 600px) {
+  .app-dialog {
+    padding: 18px;
+    max-height: calc(100dvh - 24px);
+  }
+}

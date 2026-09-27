@@ -1,0 +1,23 @@
+{{- define "stacksmith.executionEnv" -}}
+- {name: STACKSMITH_PLATFORM_EXECUTION_ENABLED, value: "true"}
+- {name: STACKSMITH_PLATFORM_SUPERVISION_MODE, value: kubernetes-jobs}
+- {name: STACKSMITH_PLATFORM_RUNNER, value: kubernetes}
+- {name: STACKSMITH_PLATFORM_EXECUTION_IMAGE, value: {{ .Values.executionImage | quote }}}
+- {name: STACKSMITH_PLATFORM_ALLOW_LOCAL_EXECUTION_IMAGE, value: {{ .Values.allowLocalExecutionImage | quote }}}
+- {name: STACKSMITH_PLATFORM_PUBLIC_URL, value: {{ .Values.publicUrl | quote }}}
+- {name: STACKSMITH_PLATFORM_EXECUTION_CALLBACK_URL, value: "http://{{ .Release.Name }}-api.{{ .Release.Namespace }}.svc:8000"}
+- {name: STACKSMITH_PLATFORM_ADMIN_LOGINS, value: {{ .Values.adminLogins | toJson | quote }}}
+- {name: STACKSMITH_PLATFORM_EXECUTION_NAMESPACE, value: {{ .Values.executionNamespace | quote }}}
+- {name: STACKSMITH_PLATFORM_EXECUTION_SERVICE_ACCOUNT, value: {{ .Values.executionServiceAccount | quote }}}
+- {name: STACKSMITH_PLATFORM_EXECUTION_CPU, value: {{ .Values.executionResources.cpu | quote }}}
+- {name: STACKSMITH_PLATFORM_EXECUTION_MEMORY, value: {{ .Values.executionResources.memory | quote }}}
+- {name: STACKSMITH_PLATFORM_SUPERVISOR_IMAGE, value: {{ .Values.image | quote }}}
+- {name: STACKSMITH_PLATFORM_SUPERVISOR_NAMESPACE, value: {{ .Release.Namespace | quote }}}
+- {name: STACKSMITH_PLATFORM_SUPERVISOR_CONFIG_SECRET, value: {{ .Values.configSecret | quote }}}
+- {name: STACKSMITH_PLATFORM_SUPERVISOR_DATABASE_SECRET, value: {{ .Values.supervisorDatabaseSecret | quote }}}
+- {name: STACKSMITH_PLATFORM_SUPERVISOR_SERVICE_ACCOUNT, value: {{ default (printf "%s-supervisor" .Release.Name) .Values.serviceAccounts.supervisor.name | quote }}}
+- {name: STACKSMITH_PLATFORM_SUPERVISOR_IMAGE_PULL_POLICY, value: {{ .Values.imagePullPolicy | quote }}}
+- {name: STACKSMITH_PLATFORM_SUPERVISOR_CPU, value: {{ .Values.supervisor.cpu | quote }}}
+- {name: STACKSMITH_PLATFORM_SUPERVISOR_MEMORY, value: {{ .Values.supervisor.memory | quote }}}
+- {name: STACKSMITH_PLATFORM_INSPECTION_WAIT_TIMEOUT, value: {{ .Values.inspectionWaitTimeout | quote }}}
+{{- end -}}

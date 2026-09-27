@@ -1,0 +1,17 @@
+*
+!pyproject.toml
+!uv.lock
+!README.md
+!src/
+!src/**
+!web/
+!web/**
+web/node_modules
+web/dist
+web/*.tsbuildinfo
+!deploy/
+!deploy/Dockerfile.execution
+!deploy/frontend.Dockerfile
+!deploy/frontend/
+!deploy/frontend/**
+**/__pycache__

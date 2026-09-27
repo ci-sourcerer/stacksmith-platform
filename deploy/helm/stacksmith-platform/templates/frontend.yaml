@@ -1,0 +1,45 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ .Release.Name }}-frontend
+spec:
+  replicas: {{ .Values.frontendReplicas }}
+  selector:
+    matchLabels: {app: "{{ .Release.Name }}", role: frontend}
+  template:
+    metadata:
+      labels: {app: "{{ .Release.Name }}", role: frontend}
+    spec:
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        runAsGroup: 10001
+        fsGroup: 10001
+        seccompProfile: {type: RuntimeDefault}
+      containers:
+        - name: frontend
+          image: {{ .Values.frontendImage | quote }}
+          imagePullPolicy: {{ .Values.imagePullPolicy }}
+          env:
+            - name: API_UPSTREAM
+              value: "http://{{ .Release.Name }}-api.{{ .Release.Namespace }}.svc:8000"
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: {drop: [ALL]}
+          resources: {{ .Values.resources.frontend | toYaml | nindent 12 }}
+          volumeMounts:
+            - {name: tmp, mountPath: /tmp}
+          ports: [{name: http, containerPort: 8080}]
+          readinessProbe:
+            httpGet:
+              path: /api/ready
+              port: http
+              httpHeaders: [{name: Host, value: "127.0.0.1"}]
+            initialDelaySeconds: 5
+          livenessProbe:
+            httpGet: {path: /healthz, port: http}
+            initialDelaySeconds: 5
+      volumes:
+        - {name: tmp, emptyDir: {sizeLimit: 64Mi}}

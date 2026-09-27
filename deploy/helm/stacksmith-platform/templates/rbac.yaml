@@ -1,0 +1,73 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: {{ .Values.executionNamespace }}
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: {{ .Values.executionServiceAccount }}
+  namespace: {{ .Values.executionNamespace }}
+automountServiceAccountToken: false
+{{- range $role := list "api" "supervisor" }}
+{{- if not (index $.Values.serviceAccounts $role).name }}
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: {{ $.Release.Name }}-{{ $role }}
+  annotations: {{ (index $.Values.serviceAccounts $role).annotations | toYaml | nindent 4 }}
+automountServiceAccountToken: true
+{{- end }}
+{{- end }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ .Release.Name }}-supervisor
+  namespace: {{ .Values.executionNamespace }}
+rules:
+  - apiGroups: [batch]
+    resources: [jobs]
+    verbs: [create, get, list, delete]
+  - apiGroups: [""]
+    resources: [pods, pods/log]
+    verbs: [get, list]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ .Release.Name }}-supervisor
+  namespace: {{ .Values.executionNamespace }}
+subjects:
+  - kind: ServiceAccount
+    name: {{ default (printf "%s-supervisor" .Release.Name) .Values.serviceAccounts.supervisor.name }}
+    namespace: {{ .Release.Namespace }}
+roleRef:
+  kind: Role
+  name: {{ .Release.Name }}-supervisor
+  apiGroup: rbac.authorization.k8s.io
+
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ .Release.Name }}-dispatch
+rules:
+  - apiGroups: [batch]
+    resources: [jobs]
+    verbs: [create, get]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ .Release.Name }}-dispatch
+subjects:
+  - kind: ServiceAccount
+    name: {{ default (printf "%s-api" .Release.Name) .Values.serviceAccounts.api.name }}
+  - kind: ServiceAccount
+    name: {{ default (printf "%s-supervisor" .Release.Name) .Values.serviceAccounts.supervisor.name }}
+roleRef:
+  kind: Role
+  name: {{ .Release.Name }}-dispatch
+  apiGroup: rbac.authorization.k8s.io

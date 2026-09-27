@@ -1,0 +1,220 @@
+x-platform-environment: &platform-environment
+  STACKSMITH_PLATFORM_EXECUTION_ENABLED: "true"
+  STACKSMITH_PLATFORM_SECRET_KEY: ${STACKSMITH_PLATFORM_SECRET_KEY:?Run poe configure}
+  STACKSMITH_PLATFORM_PUBLIC_URL: ${STACKSMITH_PLATFORM_PUBLIC_URL:-http://localhost:8000}
+  STACKSMITH_PLATFORM_EXECUTION_CALLBACK_URL: http://api:8000
+  STACKSMITH_PLATFORM_ADMIN_LOGINS: ${STACKSMITH_PLATFORM_ADMIN_LOGINS:?Set administrator GitHub logins}
+  STACKSMITH_PLATFORM_GITHUB_CLIENT_ID: ${STACKSMITH_PLATFORM_GITHUB_CLIENT_ID:?Set GitHub App client ID}
+  STACKSMITH_PLATFORM_GITHUB_CLIENT_SECRET: ${STACKSMITH_PLATFORM_GITHUB_CLIENT_SECRET:?Set GitHub App client secret}
+  STACKSMITH_PLATFORM_GITHUB_APP_ID: ${STACKSMITH_PLATFORM_GITHUB_APP_ID:?Set GitHub App ID}
+  STACKSMITH_PLATFORM_GITHUB_PRIVATE_KEY: ${STACKSMITH_PLATFORM_GITHUB_PRIVATE_KEY:?Run poe stack-check to import the GitHub App PEM}
+  STACKSMITH_PLATFORM_GITHUB_WEBHOOK_SECRET: ${STACKSMITH_PLATFORM_GITHUB_WEBHOOK_SECRET:?Run poe configure}
+  STACKSMITH_PLATFORM_CA_BUNDLE: ${STACKSMITH_PLATFORM_CA_BUNDLE:-}
+  STACKSMITH_PLATFORM_CONFIG: ${STACKSMITH_PLATFORM_CONFIG:?Set approved Composer configuration}
+  STACKSMITH_PLATFORM_DRAFT_PULL_REQUESTS: ${STACKSMITH_PLATFORM_DRAFT_PULL_REQUESTS:-true}
+  STACKSMITH_PLATFORM_EXECUTION_IMAGE: ${STACKSMITH_PLATFORM_EXECUTION_IMAGE:?Run poe execution-image or set a prebuilt execution image}
+  STACKSMITH_PLATFORM_ARTIFACT_ENDPOINT: http://storage:9000
+  STACKSMITH_PLATFORM_ARTIFACT_BUCKET: ${STACKSMITH_PLATFORM_ARTIFACT_BUCKET:-stacksmith-platform}
+  STACKSMITH_PLATFORM_ARTIFACT_ACCESS_KEY: ${STACKSMITH_PLATFORM_ARTIFACT_ACCESS_KEY:?Run poe configure}
+  STACKSMITH_PLATFORM_ARTIFACT_SECRET_KEY: ${STACKSMITH_PLATFORM_ARTIFACT_SECRET_KEY:?Run poe configure}
+  STACKSMITH_PLATFORM_SECRET_SOURCES: "${STACKSMITH_PLATFORM_SECRET_SOURCES:-{}}"
+  STACKSMITH_PLATFORM_EXECUTION_CREDENTIAL_PROVIDERS: "${STACKSMITH_PLATFORM_EXECUTION_CREDENTIAL_PROVIDERS:-{}}"
+  STACKSMITH_PLATFORM_ARTIFACT_STORE: ${STACKSMITH_PLATFORM_ARTIFACT_STORE:-s3}
+  STACKSMITH_PLATFORM_ARTIFACT_OPTIONS: "${STACKSMITH_PLATFORM_ARTIFACT_OPTIONS:-{}}"
+  STACKSMITH_PLATFORM_RUNNER_OPTIONS: "${STACKSMITH_PLATFORM_RUNNER_OPTIONS:-{}}"
+  STACKSMITH_PLATFORM_SECRET_REFERENCES: ${STACKSMITH_PLATFORM_SECRET_REFERENCES:?Run poe configure}
+  STACKSMITH_PLATFORM_COMMAND_TIMEOUT: ${STACKSMITH_PLATFORM_COMMAND_TIMEOUT:-30}
+  STACKSMITH_PLATFORM_PHASE_TIMEOUT: ${STACKSMITH_PLATFORM_PHASE_TIMEOUT:-3600}
+  STACKSMITH_PLATFORM_APPROVAL_TTL: ${STACKSMITH_PLATFORM_APPROVAL_TTL:-86400}
+  STACKSMITH_PLATFORM_ARTIFACT_RETENTION: ${STACKSMITH_PLATFORM_ARTIFACT_RETENTION:-2592000}
+  STACKSMITH_PLATFORM_EXECUTION_CPU: ${STACKSMITH_PLATFORM_EXECUTION_CPU:-1}
+  STACKSMITH_PLATFORM_DOCKER_MEMORY: ${STACKSMITH_PLATFORM_DOCKER_MEMORY:-2g}
+  FORWARDED_ALLOW_IPS: ${FORWARDED_ALLOW_IPS:-*}
+
+x-platform-ca-volume: &platform-ca-volume
+  type: bind
+  source: ${STACKSMITH_PLATFORM_CA_BUNDLE:-/dev/null}
+  target: /etc/stacksmith-custom-ca.pem
+  read_only: true
+  bind:
+    create_host_path: false
+
+x-platform: &platform
+  image: ${STACKSMITH_PLATFORM_IMAGE:-stacksmith-platform:local}
+  restart: unless-stopped
+  init: true
+  stop_grace_period: 90s
+  networks: [control, execution]
+  read_only: true
+  tmpfs: [/tmp]
+  volumes:
+    - *platform-ca-volume
+
+services:
+  frontend:
+    image: ${STACKSMITH_PLATFORM_FRONTEND_IMAGE:-stacksmith-platform-frontend:local}
+    restart: unless-stopped
+    stop_grace_period: 30s
+    ports: ["${STACKSMITH_PLATFORM_BIND_ADDRESS:-127.0.0.1}:${STACKSMITH_PLATFORM_PORT:-8000}:8080"]
+    environment:
+      API_UPSTREAM: http://api:8000
+    read_only: true
+    tmpfs: [/tmp]
+    networks: [control, public]
+    depends_on:
+      api: {condition: service_healthy}
+    healthcheck:
+      test: [CMD, wget, -q, -O, /dev/null, http://127.0.0.1:8080/healthz]
+      interval: 10s
+      retries: 5
+  postgres:
+    image: ${STACKSMITH_PLATFORM_POSTGRES_IMAGE:-postgres:18-alpine}
+    environment:
+      POSTGRES_USER: platform
+      POSTGRES_DB: ${STACKSMITH_PLATFORM_POSTGRES_DATABASE:-platform}
+      PGDATA: ${STACKSMITH_PLATFORM_POSTGRES_PGDATA:-/var/lib/postgresql/18/docker}
+      POSTGRES_PASSWORD: ${STACKSMITH_PLATFORM_DB_PASSWORD:?Run poe configure}
+      PLATFORM_API_DB_PASSWORD: ${STACKSMITH_PLATFORM_API_DB_PASSWORD:?Run poe configure}
+      PLATFORM_WORKER_DB_PASSWORD: ${STACKSMITH_PLATFORM_WORKER_DB_PASSWORD:?Run poe configure}
+    volumes:
+      - postgres:/var/lib/postgresql
+    configs:
+      - source: postgres-init
+        target: /docker-entrypoint-initdb.d/10-roles.sql
+    stop_grace_period: 60s
+    networks: [control]
+    healthcheck:
+      test: [CMD-SHELL, pg_isready -U platform]
+      interval: 5s
+      retries: 20
+  storage-backend:
+    image: chrislusf/seaweedfs:4.48
+    command: mini -dir=/data -s3.port=9000 -webdav=false -admin.ui=false -s3.port.iceberg=0 -s3.port.lance=0 -master.telemetry=false
+    environment:
+      AWS_ACCESS_KEY_ID: ${STACKSMITH_PLATFORM_ARTIFACT_ACCESS_KEY:?Run poe configure}
+      AWS_SECRET_ACCESS_KEY: ${STACKSMITH_PLATFORM_ARTIFACT_SECRET_KEY:?Run poe configure}
+      S3_BUCKET: ${STACKSMITH_PLATFORM_ARTIFACT_BUCKET:-stacksmith-platform}
+    volumes: [artifacts:/data]
+    networks: [artifact-backend]
+    stop_grace_period: 60s
+    healthcheck:
+      test: [CMD-SHELL, "wget -S -T 3 -O /dev/null http://127.0.0.1:9000/ 2>&1 | grep -Eq 'HTTP/[0-9.]+ (200|403) '"]
+      interval: 10s
+      timeout: 5s
+      start_period: 30s
+      retries: 5
+  storage:
+    image: nginx:1.30-alpine
+    configs:
+      - source: storage-nginx
+        target: /etc/nginx/nginx.conf
+    read_only: true
+    tmpfs: [/var/cache/nginx, /var/run]
+    depends_on:
+      storage-backend: {condition: service_healthy}
+    stop_signal: SIGQUIT
+    stop_grace_period: 30s
+    healthcheck:
+      test: [CMD-SHELL, "wget -S -T 3 -O /dev/null http://127.0.0.1:9000/ 2>&1 | grep -Eq 'HTTP/[0-9.]+ (200|403) '"]
+      interval: 10s
+      timeout: 5s
+      start_period: 10s
+      retries: 3
+    networks: [control, execution, artifact-backend]
+  storage-init:
+    image: ${STACKSMITH_PLATFORM_IMAGE:-stacksmith-platform:local}
+    depends_on:
+      storage: {condition: service_healthy}
+    environment:
+      AWS_ACCESS_KEY_ID: ${STACKSMITH_PLATFORM_ARTIFACT_ACCESS_KEY}
+      AWS_SECRET_ACCESS_KEY: ${STACKSMITH_PLATFORM_ARTIFACT_SECRET_KEY}
+      BUCKET: ${STACKSMITH_PLATFORM_ARTIFACT_BUCKET:-stacksmith-platform}
+    entrypoint: [python, -c]
+    command:
+      - >-
+        import os, boto3;
+        from botocore.config import Config;
+        boto3.client('s3', endpoint_url='http://storage:9000', region_name='us-east-1',
+        config=Config(connect_timeout=2, read_timeout=5, retries={'max_attempts': 10}))
+        .get_waiter('bucket_exists').wait(Bucket=os.environ['BUCKET'],
+        WaiterConfig={'Delay': 2, 'MaxAttempts': 60})
+    networks: [control]
+  migrate:
+    <<: *platform
+    restart: "no"
+    entrypoint: [stacksmith-platform-init]
+    environment:
+      <<: *platform-environment
+      STACKSMITH_PLATFORM_DATABASE_URL: postgresql+psycopg://platform:${STACKSMITH_PLATFORM_DB_PASSWORD}@postgres/${STACKSMITH_PLATFORM_POSTGRES_DATABASE:-platform}
+    depends_on:
+      postgres: {condition: service_healthy}
+  database-grants:
+    <<: *platform
+    restart: "no"
+    entrypoint: [stacksmith-platform-init, --grant-roles]
+    environment:
+      <<: *platform-environment
+      STACKSMITH_PLATFORM_DATABASE_URL: postgresql+psycopg://platform:${STACKSMITH_PLATFORM_DB_PASSWORD}@postgres/${STACKSMITH_PLATFORM_POSTGRES_DATABASE:-platform}
+    depends_on:
+      migrate: {condition: service_completed_successfully}
+    networks: [control]
+  api:
+    <<: *platform
+    environment:
+      <<: *platform-environment
+      AWS_ACCESS_KEY_ID: ${AWS_ACCESS_KEY_ID:-}
+      AWS_SECRET_ACCESS_KEY: ${AWS_SECRET_ACCESS_KEY:-}
+      AWS_SESSION_TOKEN: ${AWS_SESSION_TOKEN:-}
+      AWS_DEFAULT_REGION: ${AWS_DEFAULT_REGION:-us-east-1}
+      STACKSMITH_PLATFORM_DATABASE_URL: postgresql+psycopg://platform_api:${STACKSMITH_PLATFORM_API_DB_PASSWORD}@postgres/${STACKSMITH_PLATFORM_POSTGRES_DATABASE:-platform}
+    depends_on:
+      database-grants: {condition: service_completed_successfully}
+      storage-init: {condition: service_completed_successfully}
+    healthcheck:
+      test: [CMD, python, -c, "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/api/ready')"]
+      interval: 10s
+      retries: 5
+  worker:
+    <<: *platform
+    user: "0:0"
+    entrypoint: [stacksmith-platform-worker]
+    environment:
+      <<: *platform-environment
+      AWS_ACCESS_KEY_ID: ${AWS_ACCESS_KEY_ID:-}
+      AWS_SECRET_ACCESS_KEY: ${AWS_SECRET_ACCESS_KEY:-}
+      AWS_SESSION_TOKEN: ${AWS_SESSION_TOKEN:-}
+      AWS_DEFAULT_REGION: ${AWS_DEFAULT_REGION:-us-east-1}
+      STACKSMITH_PLATFORM_DATABASE_URL: postgresql+psycopg://platform_worker:${STACKSMITH_PLATFORM_WORKER_DB_PASSWORD}@postgres/${STACKSMITH_PLATFORM_POSTGRES_DATABASE:-platform}
+      STACKSMITH_PLATFORM_RUNNER: docker
+      STACKSMITH_PLATFORM_INSPECTION_CONCURRENCY: ${STACKSMITH_PLATFORM_INSPECTION_CONCURRENCY:-4}
+      STACKSMITH_PLATFORM_DOCKER_NETWORK: ${STACKSMITH_PLATFORM_DOCKER_NETWORK:-stacksmith-execution}
+      STACKSMITH_PLATFORM_RUN_ENVIRONMENT: "${STACKSMITH_PLATFORM_RUN_ENVIRONMENT:-{}}"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - *platform-ca-volume
+    depends_on:
+      api: {condition: service_healthy}
+    healthcheck:
+      test: [CMD, python, -m, stacksmith_platform.worker_health]
+      interval: 10s
+      timeout: 5s
+      start_period: 30s
+      retries: 3
+
+configs:
+  postgres-init:
+    file: ./deploy/postgres/init.sql
+  storage-nginx:
+    file: ./deploy/storage/nginx.conf
+
+volumes:
+  postgres:
+  artifacts:
+networks:
+  public:
+  control:
+    internal: true
+  execution:
+    name: ${STACKSMITH_PLATFORM_DOCKER_NETWORK:-stacksmith-execution}
+  artifact-backend:
+    internal: true

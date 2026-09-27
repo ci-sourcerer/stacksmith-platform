@@ -1,0 +1,18 @@
+services:
+  migration-tools:
+    image: ${STACKSMITH_PLATFORM_DEBUG_IMAGE:-stacksmith-platform:debug}
+    profiles: [tools]
+    user: "${LOCAL_UID:-10001}:${LOCAL_GID:-10001}"
+    working_dir: /workspace
+    entrypoint: [python, -m, stacksmith_platform.migration_tools]
+    environment:
+      STACKSMITH_PLATFORM_DATABASE_URL: postgresql+psycopg://platform:${STACKSMITH_PLATFORM_DB_PASSWORD}@postgres/${STACKSMITH_PLATFORM_POSTGRES_DATABASE:-platform}
+      PYTHONPATH: /workspace/src
+      HOME: /tmp
+      RUFF_CACHE_DIR: /tmp/ruff
+    volumes:
+      - ./src:/workspace/src
+      - ./alembic.ini:/workspace/alembic.ini:ro
+    networks: [control]
+    depends_on:
+      postgres: {condition: service_healthy}

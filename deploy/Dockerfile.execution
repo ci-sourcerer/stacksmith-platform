@@ -1,0 +1,13 @@
+# syntax=docker/dockerfile:1.7
+
+ARG STACKSMITH_IMAGE
+FROM ${STACKSMITH_IMAGE}
+USER root
+COPY --from=platform-wheel / /tmp/platform-wheel/
+RUN --mount=type=cache,target=/root/.cache/pip \
+    python -m pip install /tmp/platform-wheel/*.whl \
+    && rm -rf /tmp/platform-wheel
+ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1
+USER 10001:10001
+WORKDIR /work
+ENTRYPOINT ["stacksmith-platform-execute"]

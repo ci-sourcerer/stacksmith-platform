@@ -1,0 +1,54 @@
+button.list-add-button,
+button.list-remove-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.45rem;
+  flex-shrink: 0;
+  min-height: 34px;
+  padding: 0.4rem 0.65rem;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--paper);
+  color: var(--green);
+  font: inherit;
+  font-size: 12px;
+  line-height: 1.4;
+}
+button.list-add-button:hover:not(:disabled),
+button.list-remove-button:hover:not(:disabled) {
+  background: var(--accent);
+  border-color: var(--green);
+}
+.string-list-editor.string-list-editor {
+  min-width: 0;
+  padding: 0;
+  margin: 0 0 1rem;
+  border: 0;
+}
+.string-list-editor > legend {
+  margin-bottom: 0.5rem;
+  font-size: 12px;
+  font-weight: 600;
+}
+.string-list-rows {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+.string-list-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: start;
+  gap: 0.5rem;
+}
+.string-list-row > input {
+  width: 100%;
+  min-width: 0;
+}
+.string-list-editor > .list-add-button {
+  margin-top: 0.5rem;
+}
+.platform-main .string-list-row > button {
+  margin: 0;
+}

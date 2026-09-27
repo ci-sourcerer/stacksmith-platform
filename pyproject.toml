@@ -1,0 +1,120 @@
+[project]
+name = "stacksmith-platform"
+description = "A GitHub-connected authoring and execution platform for Stacksmith"
+readme = "README.md"
+requires-python = ">=3.15"
+dependencies = [
+  "fastapi>=0.115,<1",
+  "uvicorn[standard]>=0.34,<1",
+  "pydantic-settings>=2.7,<3",
+  "httpx>=0.28,<1",
+  "certifi>=2024.2.2",
+  "ruamel.yaml>=0.18,<0.19",
+  "jinja2>=3.1.6,<4",
+  "itsdangerous>=2.2,<3",
+  "cryptography>=44",
+  "sqlalchemy>=2.0,<3",
+  "psycopg[binary]>=3.2,<4",
+  "boto3>=1.35,<2",
+  "pyjwt[crypto]>=2.10,<3",
+  "docker>=7,<8",
+  "kubernetes>=32,<36",
+  "python-dotenv>=1,<2",
+  "alembic>=1.18,<2",
+]
+dynamic = ["version"]
+
+[tool.poe]
+include_script = "common_python_tasks:tasks(exclude_tags=['fastapi'])"
+
+[tool.poe.env]
+CONTAINER_APT_PACKAGES = "git"
+CONTAINER_CUSTOM_ENTRYPOINT = "stacksmith-platform"
+CONTAINER_DOCKER_BUILD_ARGS = "--build-arg NONROOT_UID=10001 --build-arg NONROOT_GID=10001"
+
+[tool.poe.tasks]
+configure = { script = "scripts.configure:main" }
+stack-check = { script = "scripts.configure:check" }
+stack-down = { script = "scripts.stack:down" }
+stack-logs = { script = "scripts.stack:logs" }
+db-shell = { script = "scripts.stack:db_shell" }
+reset-db = { script = "scripts.stack:reset_db" }
+check-db-migrations = { script = "scripts.stack:check_db_migrations" }
+kube-up = ["stack-check", "platform-image", "frontend-image", "execution-image", "kube-start"]
+kube-start = { script = "scripts.kubernetes:up" }
+kube-forward = { script = "scripts.kubernetes:forward" }
+test = { script = "scripts.run_tests:main" }
+web-install = "npm --prefix web ci"
+web-format = "npm --prefix web run format"
+web-lint = "npm --prefix web run lint"
+web-test = "npm --prefix web test"
+web-build = "npm --prefix web run build"
+
+[tool.poe.tasks.run-db-migrations]
+script = "scripts.stack:run_db_migrations"
+args = [{ name = "no_build", options = ["--no-build"], type = "boolean" }]
+
+[tool.poe.tasks.create-db-migration]
+script = "scripts.stack:create_db_migration"
+args = [
+  { name = "message", options = ["--message", "-m"], required = true },
+  { name = "empty", options = ["--empty"], type = "boolean" },
+]
+
+[tool.poe.tasks.stack-up]
+script = "scripts.stack:up"
+use_exec = true
+args = [
+  { name = "services", options = ["--service"], multiple = true },
+  { name = "debug", options = ["--debug"], type = "boolean" },
+  { name = "detach", options = ["--detach"], type = "boolean" },
+  { name = "no_cache", options = ["--no-cache"], type = "boolean" },
+]
+
+[tool.poe.tasks.platform-image]
+script = "scripts.images:platform"
+args = [
+  { name = "debug", options = ["--debug"], type = "boolean" },
+  { name = "no_cache", options = ["--no-cache"], type = "boolean" },
+]
+
+[tool.poe.tasks.frontend-image]
+script = "scripts.images:frontend"
+args = [
+  { name = "debug", options = ["--debug"], type = "boolean" },
+  { name = "no_cache", options = ["--no-cache"], type = "boolean" },
+]
+
+[tool.poe.tasks.execution-image]
+script = "scripts.build_execution:main"
+args = [{ name = "no_cache", options = ["--no-cache"], type = "boolean" }]
+
+
+[project.scripts]
+stacksmith-platform = "stacksmith_platform.__main__:main"
+stacksmith-platform-supervise = "stacksmith_platform.supervision:supervise_main"
+stacksmith-platform-maintain = "stacksmith_platform.supervision:maintain_main"
+stacksmith-platform-worker = "stacksmith_platform.worker:main"
+stacksmith-platform-execute = "stacksmith_platform.execution:main"
+stacksmith-platform-init = "stacksmith_platform.admin:main"
+
+[tool.hatch.version]
+source = "uv-dynamic-versioning"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/stacksmith_platform"]
+
+[tool.uv-dynamic-versioning]
+style = "pep440"
+dirty = true
+
+[tool.uv]
+package = true
+
+[dependency-groups]
+dev = ["common-python-tasks (>=0.12.1)"]
+debug = ["debugpy>=1.8,<2", "ruff>=0.15"]
+
+[build-system]
+requires = ["hatchling>=1.27.0", "uv-dynamic-versioning>=0.14.0"]
+build-backend = "hatchling.build"

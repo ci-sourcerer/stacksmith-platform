@@ -1,0 +1,58 @@
+image: stacksmith-platform:local
+frontendImage: stacksmith-platform-frontend:local
+imagePullPolicy: IfNotPresent
+executionImage: ""
+allowLocalExecutionImage: false
+publicUrl: https://stacksmith.example.com
+# The API Service is private behind the frontend proxy. Narrow to proxy IPs
+# when other sources can reach it with forwarded headers.
+forwardedAllowIps: "*"
+adminLogins: []
+# Existing Secret containing STACKSMITH_PLATFORM_SECRET_KEY, GitHub App settings,
+# artifact credentials/endpoint, and optional secret references/configuration.
+configSecret: stacksmith-platform-config
+# Each database Secret contains one key: STACKSMITH_PLATFORM_DATABASE_URL.
+apiDatabaseSecret: stacksmith-platform-api-database
+supervisorDatabaseSecret: stacksmith-platform-supervisor-database
+migrationDatabaseSecret: stacksmith-platform-migration-database
+executionNamespace: stacksmith-runs
+executionServiceAccount: stacksmith-execution
+apiReplicas: 1
+frontendReplicas: 1
+resources:
+  frontend:
+    requests: {cpu: 50m, memory: 32Mi}
+    limits: {cpu: 500m, memory: 128Mi}
+  api:
+    requests: {cpu: 100m, memory: 256Mi}
+    limits: {cpu: "1", memory: 1Gi}
+supervisor:
+  cpu: "1"
+  memory: 1Gi
+inspectionWaitTimeout: 180
+recovery:
+  resources:
+    requests: {cpu: 100m, memory: 256Mi}
+    limits: {cpu: "1", memory: 1Gi}
+executionResources:
+  cpu: "1"
+  memory: 2Gi
+ingress:
+  enabled: false
+  className: ""
+  host: stacksmith.example.com
+  tlsSecret: ""
+# Execution can reach DNS, public HTTPS dependencies/providers, the API claim
+# endpoint, and configured artifact storage. Add private provider CIDRs here.
+privateEgress: []
+# Example: [{cidr: 10.20.0.0/16, port: 443}]
+
+# Leave names empty to use chart-managed accounts. Existing accounts may supply
+# workload identity annotations. The supervisor account also receives supervisor RBAC.
+serviceAccounts:
+  api:
+    name: ""
+    annotations: {}
+  supervisor:
+    name: ""
+    annotations: {}
