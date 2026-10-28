@@ -18,7 +18,7 @@ When one configured target grants Infrastructure planning access and no choice h
 
 The canvas reports when managed connections are pending, inspected, or incomplete because inspection failed. Authored connections remain available during failures. Successful Review and Resolution results show their source and configuration revisions under **Inspection context**. PR creation repeats inspection and records that context in the PR description. Deployment planning remains separate from Composer inspection.
 
-While managed connections first load, the diagram is lightly blurred and shows **Loading managed connections**. Component types also show a loading indicator until the catalog is ready. Later edits show **Updating managed connections** while keeping the previous diagram visible. These indicators clear when inspection completes or fails. Unchanged stack source is available immediately from the opened snapshot; edited source renders independently of inspection.
+While managed connections first load, the diagram is lightly blurred and shows **Loading managed connections**. Component types also show a loading indicator until the catalog is ready. Later edits keep the previous diagram visible and usable, with progress shown in the existing canvas status and status bar. Loading indicators clear when inspection completes or fails. Unchanged stack source is available immediately from the opened snapshot; edited source renders independently of inspection.
 
 ## View without editing
 

@@ -345,10 +345,8 @@ function Diagram(props: Props) {
           </div>
         </Panel>
       </ReactFlow>
-      {props.inspecting && (
-        <ManagedConnectionLoading
-          hasPrevious={props.hasInspectedAssociations}
-        />
+      {props.inspecting && !props.hasInspectedAssociations && (
+        <ManagedConnectionLoading />
       )}
       <div className="canvas-legend">
         <div

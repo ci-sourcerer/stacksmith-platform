@@ -112,12 +112,11 @@ it("marks the initial diagram incomplete and clears the blur and announcement on
 it("keeps an inspected canvas clear and editing controls available during a refresh", async () => {
   await render({ hasInspectedAssociations: true });
   expect(container.querySelector(".is-loading-connections")).toBeNull();
-  expect(container.querySelector('[role="status"]')?.textContent).toContain(
-    "Updating managed connections",
-  );
-  expect(container.querySelector('[role="status"]')?.textContent).toContain(
-    "Previous connections stay visible",
-  );
+  expect(container.querySelector(".managed-connection-loading")).toBeNull();
+  expect(container.textContent).toContain("Inspecting managed connections…");
+  expect(
+    container.querySelector('[data-testid="flow"]')?.getAttribute("aria-busy"),
+  ).toBe("true");
   expect(
     container.querySelector<HTMLButtonElement>('button[aria-label="Undo"]')
       ?.disabled,
