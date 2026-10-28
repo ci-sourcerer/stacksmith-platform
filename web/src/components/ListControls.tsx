@@ -62,7 +62,7 @@ export function StringListEditor({
   placeholder?: string;
 }) {
   return (
-    <fieldset className="string-list-editor" disabled={disabled}>
+    <fieldset className="string-list-editor list-editor" disabled={disabled}>
       <legend>{label}</legend>
       <div className="string-list-rows">
         {items.map((item, index) => (

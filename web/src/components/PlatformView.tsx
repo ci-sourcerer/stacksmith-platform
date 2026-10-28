@@ -1,16 +1,6 @@
 import { SettingsPanel } from "./SettingsLayout";
 import { useState, type ReactNode } from "react";
-import {
-  BookOpen,
-  Boxes,
-  Code2,
-  ExternalLink,
-  GitBranch,
-  Layers,
-  ShieldCheck,
-  TriangleAlert,
-} from "lucide-react";
-import type { LucideIcon } from "lucide-react";
+import { Code2, ExternalLink, TriangleAlert } from "lucide-react";
 import type { Platform, SourceDetails } from "../types";
 
 function SourceAttribution({ source }: { source: SourceDetails }) {
@@ -37,25 +27,19 @@ function SourceAttribution({ source }: { source: SourceDetails }) {
 }
 
 function PlatformSection({
-  icon: Icon,
   title,
   description,
+  summary,
   children,
 }: {
-  icon: LucideIcon;
   title: string;
   description: string;
+  summary?: ReactNode;
   children: ReactNode;
 }) {
   return (
-    <SettingsPanel
-      title={
-        <>
-          <Icon size={19} aria-hidden="true" /> {title}
-        </>
-      }
-      description={description}
-    >
+    <SettingsPanel title={title} description={description}>
+      {summary}
       <div className="platform-card-grid">{children}</div>
     </SettingsPanel>
   );
@@ -97,37 +81,43 @@ export function PlatformView({
 
   return (
     <section className="information-view">
-      {configuration.layers && configuration.layers.length > 1 && (
-        <label className="configuration-layer-picker">
-          Authored configuration layer
-          <select
-            value={layer}
-            onChange={(event) => setLayer(Number(event.target.value))}
-          >
-            {configuration.layers.map((item, index) => (
-              <option key={item.reference} value={index}>
-                {index + 1}. {item.reference}
-              </option>
-            ))}
-          </select>
-          <small>
-            Layers are applied in order. Use Resolution to inspect merged
-            effective values.
-          </small>
-        </label>
-      )}
-      <p className="intro-copy">{platform.description}</p>
-      <div className="notice">
-        <BookOpen size={17} />
-        <span>
-          {platform.scope} Source: <code>{platform.source}</code>
-        </span>
-      </div>
-
       <PlatformSection
-        icon={Layers}
         title="State & tooling"
-        description="The backend and tools used to build and manage this stack."
+        description={
+          platform.description ||
+          "The backend and tools used to build and manage this stack."
+        }
+        summary={
+          <>
+            {configuration.layers && configuration.layers.length > 1 && (
+              <label className="configuration-layer-picker">
+                Authored configuration layer
+                <select
+                  value={layer}
+                  onChange={(event) => setLayer(Number(event.target.value))}
+                >
+                  {configuration.layers.map((item, index) => (
+                    <option key={item.reference} value={index}>
+                      {index + 1}. {item.reference}
+                    </option>
+                  ))}
+                </select>
+                <small>
+                  Layers are applied in order. This view shows each layer before
+                  merging.
+                </small>
+              </label>
+            )}
+            <div className="configuration-summary">
+              <p>
+                {platform.scope} Source: <code>{platform.source}</code>
+              </p>
+              <small className="field-help">
+                Credential-like fields in source configuration are redacted.
+              </small>
+            </div>
+          </>
+        }
       >
         <PlatformCard
           title="State backend"
@@ -160,13 +150,9 @@ export function PlatformView({
             source={tool.source}
           />
         ))}
-        <PlatformCard title="Configuration visibility">
-          <p>Credential-like fields in source configuration are redacted.</p>
-        </PlatformCard>
       </PlatformSection>
 
       <PlatformSection
-        icon={ShieldCheck}
         title="Providers & required context"
         description="Provider versions, instances, and required module inputs."
       >
@@ -194,24 +180,16 @@ export function PlatformView({
           </PlatformCard>
         ))}
         {!platform.providers.length && (
-          <PlatformCard title="Providers">
-            <p>No providers declared in this configuration.</p>
-          </PlatformCard>
+          <p className="field-help">
+            No providers declared in this configuration.
+          </p>
         )}
         <PlatformCard title="Required input sets">
-          <div className="interface-summary single">
-            <div>
-              <strong>Required context</strong>
-              <span>
-                {platform.required_input_sets.join(", ") || "None declared"}
-              </span>
-            </div>
-          </div>
+          <p>{platform.required_input_sets.join(", ") || "None declared"}</p>
         </PlatformCard>
       </PlatformSection>
 
       <PlatformSection
-        icon={Boxes}
         title="Managed component types"
         description="Each component resolves to an administrator-approved OpenTofu module and public interface."
       >
@@ -219,7 +197,7 @@ export function PlatformView({
           <article className="platform-component-card" key={component.name}>
             <div className="component-summary">
               <div>
-                <h3>{component.description || component.name}</h3>
+                <h4>{component.description || component.name}</h4>
                 <code>{component.name}</code>
               </div>
               <div className="tag-list">
@@ -246,14 +224,11 @@ export function PlatformView({
           </article>
         ))}
         {!platform.components.length && (
-          <PlatformCard title="Managed components">
-            <p>No explicit module mappings declared.</p>
-          </PlatformCard>
+          <p className="field-help">No explicit module mappings declared.</p>
         )}
       </PlatformSection>
 
       <PlatformSection
-        icon={GitBranch}
         title="Managed associations"
         description="Rules that connect approved component outputs to inputs."
       >
@@ -268,14 +243,11 @@ export function PlatformView({
             </PlatformCard>
           ))
         ) : (
-          <PlatformCard title="Managed associations">
-            <p>No managed associations declared.</p>
-          </PlatformCard>
+          <p className="field-help">No managed associations declared.</p>
         )}
       </PlatformSection>
 
       <PlatformSection
-        icon={ShieldCheck}
         title="Validation policies"
         description="Configuration checks applied to managed components."
       >
@@ -293,24 +265,18 @@ export function PlatformView({
             </PlatformCard>
           ))
         ) : (
-          <PlatformCard title="Validation policies">
-            <p>No named validation policies declared.</p>
-          </PlatformCard>
+          <p className="field-help">No named validation policies declared.</p>
         )}
       </PlatformSection>
 
       {platform.has_default_mapping && (
         <PlatformSection
-          icon={Boxes}
           title="Default module mapping"
           description="A fallback module mapping is configured for otherwise unmapped types."
         >
-          <PlatformCard title="Default mapping">
-            <p>
-              The catalog currently lists explicitly mapped component types
-              only.
-            </p>
-          </PlatformCard>
+          <p className="field-help">
+            The catalog currently lists explicitly mapped component types only.
+          </p>
         </PlatformSection>
       )}
     </section>

@@ -398,7 +398,7 @@
 
 .platform-main button:hover:not(:disabled),
 .platform-main a.button:hover {
-  background: var(--accent);
+  background: var(--button-hover);
   border-color: var(--green);
 }
 .platform-main a:not(.button),
@@ -1306,21 +1306,6 @@
   overflow-wrap: anywhere;
 }
 
-.github-settings .repository-filter-editor > fieldset {
-  min-width: 0;
-  margin: 1.25rem 0;
-  padding: 1.1rem;
-  border: 1px solid var(--line);
-  border-radius: 8px;
-}
-
-.github-settings .repository-filter-editor > fieldset > legend {
-  padding: 0 0.4rem;
-  margin: 0;
-  font-size: inherit;
-  font-weight: 600;
-}
-
 .github-settings .repository-filter-editor .repository-property-row {
   gap: 0.5rem;
   margin-bottom: 0.5rem;
@@ -1442,7 +1427,7 @@
   ) {
   background: #4d8c65;
   border-color: #4d8c65;
-  color: #fff;
+  color: var(--background);
 }
 .run-launch-panel :is(button, a, input, select, summary):focus-visible {
   outline: 2px solid var(--green);

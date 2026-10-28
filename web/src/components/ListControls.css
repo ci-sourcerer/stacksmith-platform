@@ -17,19 +17,20 @@ button.list-remove-button {
 }
 button.list-add-button:hover:not(:disabled),
 button.list-remove-button:hover:not(:disabled) {
-  background: var(--accent);
+  background: var(--button-hover);
   border-color: var(--green);
 }
-.string-list-editor.string-list-editor {
+.list-editor.list-editor {
   min-width: 0;
   padding: 0;
   margin: 0 0 1rem;
   border: 0;
 }
-.string-list-editor > legend {
+.list-editor > legend {
   margin-bottom: 0.5rem;
   font-size: 12px;
   font-weight: 600;
+  padding: 0;
 }
 .string-list-rows {
   display: flex;

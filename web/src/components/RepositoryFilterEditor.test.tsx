@@ -24,7 +24,10 @@ it("provides explicit non-submit removal controls for organization property rule
   const markup = renderToStaticMarkup(
     <RepositoryFilterFields {...fields} organizations />,
   );
-  expect(markup).toContain('<fieldset class="repository-filter-group">');
+  expect(markup).toContain(
+    '<fieldset class="repository-filter-group list-editor">',
+  );
+  expect(markup).toContain('<fieldset class="string-list-editor list-editor">');
   expect(markup).toContain("Add property rule");
   expect(markup.indexOf("Add property rule")).toBeLessThan(
     markup.indexOf("</fieldset>"),
@@ -48,7 +51,7 @@ it("disables property actions while saving", () => {
     <RepositoryFilterFields {...fields} organizations busy />,
   );
   expect(markup).toContain(
-    '<fieldset class="repository-filter-group" disabled="">',
+    '<fieldset class="repository-filter-group list-editor" disabled="">',
   );
   expect(markup.match(/<fieldset[^>]*disabled/g)).toHaveLength(2);
 });

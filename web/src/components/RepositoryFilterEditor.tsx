@@ -267,7 +267,7 @@ export function RepositoryFilterFields({
   return (
     <>
       <fieldset
-        className="repository-filter-group"
+        className="repository-filter-group list-editor"
         disabled={!organizations || busy}
       >
         <legend>Custom properties</legend>

@@ -13,6 +13,7 @@
   --muted: #788178;
   --paper: #fffefa;
   --accent: #dfe9de;
+  --button-hover: var(--accent);
 }
 * {
   box-sizing: border-box;
@@ -2321,6 +2322,7 @@ input[type="checkbox"] {
   --muted: #7d9177;
   --paper: #1c2520;
   --accent: #253428;
+  --button-hover: color-mix(in srgb, var(--foreground) 7%, var(--paper));
 }
 .dark input,
 .dark textarea,
