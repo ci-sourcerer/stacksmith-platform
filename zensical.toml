@@ -7,13 +7,17 @@ repo_url = "https://github.com/ci-sourcerer/stacksmith-platform"
 nav = [
   { "Home" = "index.md" },
   { "Using Composer" = "using-composer.md" },
+  { "Settings" = "settings.md" },
+  { "Runs" = "runs.md" },
   { "GitHub workflow" = "github-workflow.md" },
   { "Configuration" = "configuration.md" },
   { "Platform integrations" = "integrations.md" },
-    { "Deployment" = "deployment.md" },
-    { "API" = "api.md" },
-    { "Roles and access" = "roles.md" },
+  { "Deployment" = "deployment.md" },
+  { "Database migrations" = "database-migrations.md" },
+  { "API" = "api.md" },
+  { "Roles and access" = "roles.md" },
   { "Architecture and trust" = "architecture-and-trust.md" },
+  { "Performance notes" = "performance.md" },
 ]
 
 [project.theme]

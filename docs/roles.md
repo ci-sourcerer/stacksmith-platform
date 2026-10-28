@@ -11,6 +11,7 @@ Stacksmith Platform combines scoped roles with workload access. GitHub repositor
 | Manage environment settings and credentials | All | Assigned scope | No | No |
 | Edit shared configuration and author Composer changes | All | Repository-wide assignments | No | No |
 | Manage roles and platform configuration | Yes | No | No | No |
+| Delete terminal run history and artifacts | Yes | No | No | No |
 
 Assignments cover one repository and either every environment or one named environment. Viewer assignments have no execution workloads. Runner and Provisioner assignments select Infrastructure, Operations, or both. Mixed runs require access to every selected workload, including approval and cancellation. Read access covers all run types within the assigned environment.
 
@@ -20,7 +21,7 @@ Repository-wide Provisioners can author Composer PRs and change shared configura
 
 Environment-backed Composer inspection also requires Infrastructure planning access to the selected environment because it receives runtime variables and credentials enabled for `prepare`. Structural graph extraction and source export retain the existing repository and authoring permission checks and do not receive deployment credentials.
 
-Settings is the shared destination for workspace selection, account controls, repository configuration, and administration. Workspace selects the active repository, Composer stack, and environment shared by Composer inspection and Runs; both show that context and link back to Settings to change it. Applying a different environment preserves the Composer draft and undo history while refreshing resolved inspection. The selection is remembered per account in this browser, while existing tabs retain their own active state. Repository sections contain deployment, configuration, credential, and role controls. Account contains GitHub connection and API tokens; Administration contains platform defaults and execution health. Unavailable actions are hidden or disabled, and the API independently checks every protected request.
+[Settings](settings.md) manages workspace selection, account controls, repository configuration, and administration. Workspace selects the repository, Composer stack, and inspection environment. [Runs](runs.md) starts from that selection once and then remembers an independent target. Unavailable actions are hidden or disabled, and the API independently checks every protected request.
 
 GitHub-triggered runs use the triggering user's or bot's role and workloads, just like manual requests. PR authorization and deployment approval require a matching Provisioner or Admin. Assign explicit roles to automation bot logins when needed.
 

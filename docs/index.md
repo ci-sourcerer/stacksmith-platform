@@ -4,7 +4,7 @@ Stacksmith Platform combines Composer's visual stack editor with GitHub-connecte
 
 GitHub supplies repository access and identity. The platform supplies durable execution, explicit environment permissions, credentials, approval history, and isolated Docker or Kubernetes runtimes. Same-repository PR plans require authorization before code receives credentials; default-branch deployments wait for approval after previews.
 
-Use [Composer](using-composer.md) for visual authoring and the [GitHub workflow](github-workflow.md) for repository changes. The Runs page at `/runs` provides environment selection, infrastructure and operation actions, approvals, cancellation, reports, and reconciliation of uncertain runs.
+Use [Composer](using-composer.md) for visual authoring and the [GitHub workflow](github-workflow.md) for repository changes. [Settings](settings.md) manages workspace, repository discovery, configuration, and account controls. [Runs](runs.md) covers planning, execution, approvals, reports, and recovery.
 
 Read [Configuration](configuration.md), [Deployment](deployment.md), [API](api.md), and [Architecture and trust](architecture-and-trust.md) before setting up hosted execution.
 

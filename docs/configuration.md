@@ -14,6 +14,7 @@ Settings use the `STACKSMITH_PLATFORM_` environment prefix and optionally a loca
 | `INSPECTION_WAIT_TIMEOUT` | Overall inspection wait limit in seconds, including queueing and startup | `COMMAND_TIMEOUT + 60` |
 | `PUBLIC_URL` | Browser origin and GitHub OAuth callback base | `http://127.0.0.1:5173` |
 | `GITHUB_CLIENT_ID` / `GITHUB_CLIENT_SECRET` | GitHub App user authorization | Unset |
+| `GITHUB_APP_SLUG` | App identity for installation links when private-key credentials are unavailable | Unset |
 | `SECRET_KEY` | Stable snapshot signing and database encryption secret | Random only in local demo |
 | `DATABASE` | SQLite path when platform execution is disabled | `.data/platform.sqlite3` |
 | `DRAFT_PULL_REQUESTS` | Open draft rather than regular PRs | `false` |
@@ -33,7 +34,9 @@ GitHub mode requires a stable `SECRET_KEY` of at least 32 characters. The callba
 | `EXECUTION_IMAGE` | Named `@sha256:` execution image; Docker also accepts local `sha256:` IDs | Required for execution |
 | `EXECUTION_CALLBACK_URL` | API origin reachable from execution containers | Falls back to public URL |
 | `RUNNER` | `docker` or `kubernetes` | `docker` |
+| `SUPERVISION_MODE` | Persistent `worker` or temporary `kubernetes-jobs` supervision | `worker`; Helm selects `kubernetes-jobs` |
 | `WORKER_ID` | Optional stable supervisor identifier | Container hostname for PID 1; otherwise random per worker start |
+| `INSPECTION_CONCURRENCY` | Maximum concurrent isolated inspections per Compose worker; positive integer | `4` |
 | `PHASE_TIMEOUT` | Execution deadline in seconds | `3600` |
 | `APPROVAL_TTL` | Approval/private-handoff lifetime, at most 24 hours | `86400` |
 | `ARTIFACT_RETENTION` | Review-artifact lifetime in seconds | `2592000` |
@@ -51,6 +54,8 @@ GitHub mode requires a stable `SECRET_KEY` of at least 32 characters. The callba
 For Compose deployments, `CA_BUNDLE` points to an absolute host path containing additional PEM certificates. The file is mounted read-only into the API and worker and into Docker-launched run containers. The platform combines it with the existing public CA bundle, so public roots remain trusted. Leave it unset when no additional CA certificates are needed. Helm/Kubernetes deployments do not use this Compose-only setting.
 
 See [Deployment](deployment.md) for Compose files, Kubernetes Secrets, database roles, runtime image builds, and endpoint routing.
+
+[Settings](settings.md#repository-configuration) manages repository discovery and approved configuration layers at runtime. **Effective configuration** shows authored layer metadata; Composer **Resolution** inspects merged values for the draft and selected context. Saving a discovery filter does not change the App's repository permissions or enable deployments.
 
 ## Compose configuration
 

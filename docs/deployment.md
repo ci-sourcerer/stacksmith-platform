@@ -4,35 +4,19 @@ The first release targets one trusted team. Use the same API and worker codebase
 
 ## GitHub App
 
-Configure user authorization at `<public-url>/api/auth/callback` and the webhook URL at `<public-url>/api/v1/webhooks/github`. Subscribe to push and pull-request events. Set a distinct webhook secret. The App needs repository Contents read/write, Pull requests read/write, and Metadata access. Install it on repositories that administrators will register and on approved private configuration/module repositories.
+Configure user authorization at `<public-url>/api/auth/callback` and the webhook URL at `<public-url>/api/v1/webhooks/github`. Subscribe to push, pull-request, and repository events. Set a distinct webhook secret. The App needs repository Contents read/write, Pull requests read/write, and Metadata read access. [Reading custom-property values](https://docs.github.com/en/rest/repos/custom-properties#get-all-custom-property-values-for-a-repository) uses Metadata read permission. Install the App on repositories to be discovered and on approved private configuration/module repositories.
 
-Repository discovery defaults to matching custom property `stacksmith=stack` or topic `stacksmith-stack`. Personal-account installations use topics; custom properties are available for organization repositories. In **Settings > Account > GitHub connection**, property controls are disabled unless an organization installation is available to the signed-in user. Unavailable custom property metadata does not block repository discovery or topic matching.
+Repository discovery defaults to matching custom property `stacksmith=stack` or topic `stacksmith-stack`. Personal-account installations use topics; custom properties require an organization installation. Administrators edit these rules under **Settings > Account > GitHub connection**. Unavailable custom property metadata does not block topic matching.
 
 Set the App client ID/secret, App ID, and PEM private key. Store the stable platform secret securely and back it up with the database; changing it prevents decryption of stored credentials. `STACKSMITH_PLATFORM_ADMIN_LOGINS` bootstraps administrators. GitHub sign-in alone grants no deployment capability.
 
 The trusted reverse proxy must forward the browser Host and scheme. Uvicorn's `FORWARDED_ALLOW_IPS` controls which proxy addresses may supply forwarded headers; the supplied Compose example and private-Service Helm deployment trust their fronting proxy. Set the Helm `forwardedAllowIps` value or the environment variable to explicit proxy addresses when needed. Correct scheme forwarding prevents OAuth redirect loops behind TLS termination.
 
-Open **Settings** to choose the active workspace, configure deployments, grant permissions, manage credentials, and inspect execution health. **Account > GitHub connection** contains App installation, repository access, discovery filters, and administrator refresh controls. **Workspace** selects the repository, Composer stack, and inspection environment used by Composer and repository settings. Newly discovered repositories inherit platform configuration and start with deployments disabled; administrators enable them under **Repository > Deployment settings**. Platform defaults, GitHub connection, audit log, and execution health do not require a selected repository.
+Newly discovered repositories inherit platform configuration and start with deployments disabled. Administrators enable them under **Settings > Repository > Deployment settings**, then configure environment credentials and [roles](roles.md). See [Settings](settings.md) for workspace, configuration layers, tokens, and administration, and [Runs](runs.md) for execution and approval workflows.
 
-Choose a repository and environment directly in **Runs**. Its selection starts from your workspace once, then is remembered separately for your account in this browser. Runs links use `repo` and `environment` query parameters without changing Composer's saved workspace. **All environments** shows repository history; choose a specific active environment to start a run. Changing repository selects its sole active environment automatically, or All environments when several exist. Inactive environments retain their history but cannot receive new runs.
+`STACKSMITH_PLATFORM_CONFIG` supplies bootstrap defaults until a platform policy is saved. Repository policies inherit, append, or replace those defaults using GitHub file references pinned to full commit SHAs. Existing explicitly configured repositories retain their replacement policy until changed.
 
-The compact run form groups **Infrastructure** and **Operations** under **Include**. Enable **Apply after approval** to request changes after reviewing a plan, or **Plan to destroy** for removal plans. Changing target clears operation selections, apply/destruction flags, and administrator overrides. Commit and local-backend overrides remain under administrator-only **Advanced run options**.
-
-Administrators can open **Settings > Administration > Audit log** to review run, configuration, and account events across the platform. Filter by repository, run ID, actor, or event; filters and pagination are retained in the URL. Run details link administrators to the filtered audit page. Both the platform audit API (`GET /api/v1/audit`) and the per-run audit API require an administrator browser session; ordinary users and API tokens cannot read audit events. Audit metadata excludes secret values.
-
-Release the audit API and frontend together with database migration `0003`. Apply database migrations before starting the updated API and workers; the migration backfills repository scope on existing audit events. This change does not require a new Stacksmith CLI or execution image.
-
-**API tokens** is an account-wide page listing your tokens across repositories. Choose a repository and environment explicitly inside the token creation form; changing the workspace repository does not change a token's scope.
-
-The shared repository selector searches names and available descriptions. Arrow keys navigate results without changing the selection; Enter or a click chooses a repository. Escape dismisses the dropdown. The result list keeps a small rendered window for large accounts. Composer uses the same selector before listing the chosen repository's stack files.
-
-The token table starts with active tokens and offers All, Expired, and Revoked filters. Rows show repository and environment scope, capabilities, expiry, and status. Only active tokens offer a Revoke action.
-
-Use **Settings > Administration > Platform defaults** for shared defaults. Use **Repository configuration** to inherit those defaults, append repository layers, or replace them. Repository administrators can manage their repository policy. Saved references must end in a full commit SHA; later layers follow Stacksmith's configuration merge rules. Composer and Runs use the same effective configuration. `STACKSMITH_PLATFORM_CONFIG` supplies bootstrap defaults until a platform policy is saved. Previously registered repository configurations remain explicit replacements until changed.
-
-Configuration layers use separate repository, file path, and commit fields. Add, remove, and reorder rows with their controls. The effective-layer cards update immediately and show platform or repository provenance; the Unsaved preview badge means those edits have not taken effect. Repeated references keep their first occurrence. Save configuration to activate the proposed order. Runs that reviewed different effective layers must be planned again.
-
-Administrators can expand **Advanced run options** beneath the normal run controls to supply an exceptional commit override. A populated override remains visible in the collapsed summary. Blank uses the latest default-branch commit, and overrides retain their administrator approval requirement.
+Apply [database migrations](database-migrations.md) before starting updated API and supervisor processes, and release the API and frontend together. Execution credential changes also require an updated execution image; see [Platform integrations](integrations.md#execution-credential-providers).
 
 Open **Deployment settings** after choosing a repository. Platform inspects the immutable default-branch revision with Stacksmith and presents each valid deployment root, detected structure, and environment list. A root-level deployment is labeled **Repository root**, so no `.` path is required. If the repository contains multiple plausible roots, select one; the first release configures one deployment root per repository.
 
@@ -139,10 +123,11 @@ kubectl config use-context minikube
 uv run poe kube-up
 ```
 
-`kube-up` checks `.env`, builds the Python, frontend, and execution images, loads them into Minikube, and provisions local PostgreSQL and artifact storage with persistent volumes. It creates the shared configuration and three database Secrets, installs the Helm chart, creates the artifact bucket, and starts a background port forward to <http://localhost:8000>. It reads current AWS credentials from the shell or the `root` profile and passes them to API secret sources and every run. `STACKSMITH_RUN_` entries in `.env` or the shell are also passed to runs. Run `uv run poe kube-up` again after rebuilding or renewing credentials; it updates the Secrets and restarts the API and frontend. If only the port forward has stopped, run `uv run poe kube-forward`.
+`kube-up` checks `.env`, builds the Python, frontend, and execution images, loads them into Minikube, and provisions local PostgreSQL and artifact storage with persistent volumes. It creates the shared configuration and three database Secrets, installs the Helm chart, creates the artifact bucket, and starts a background port forward to <http://localhost:8000>. It reads AWS credentials from the shell or the `root` profile for the control plane. These are also passed to runs unless execution credential providers are configured; explicit `STACKSMITH_RUN_` entries still apply. Run `uv run poe kube-up` again after rebuilding or renewing credentials; it updates the Secrets and restarts the API and frontend. If only the port forward has stopped, run `uv run poe kube-forward`.
 
 The local image allowance is enabled only by this task. Regular Helm deployments still require an immutable named execution image digest. The PostgreSQL and storage volumes persist across reruns; keep the generated database passwords in `.env` stable. Free local port 8000 before starting the forward, for example by stopping the Compose stack.
 
+### Helm
 
 The Helm chart is `deploy/helm/stacksmith-platform`. It deploys frontend, API, and supervisor workloads, frontend and API Services, optional Ingress routed to the frontend, the schema hook, execution namespace, restricted supervisor RBAC, execution service account, and execution egress policy. PostgreSQL and S3-compatible storage are supplied externally.
 
@@ -180,12 +165,6 @@ Phase deadlines default to 60 minutes. Authoring inspection defaults to 30 secon
 Cancel sends a termination request to the execution runtime. Cancellation of a claimed mutating phase can leave partial infrastructure changes and is marked uncertain. Review Stacksmith's reports and remote state before starting another deployment.
 
 Never expose object-store credentials or schema-administrator database credentials to run Pods. Platform secrets must not be included in container builds, repository configuration, or browser recovery files. The Helm chart references existing Secrets instead of rendering secret values into release manifests.
-
-## Test plans and list navigation
-
-Run history and API tokens use server-side pagination with 10, 20, or 50 items per page. Token status counts cover the whole account.
-
-Platform administrators can open Advanced run options and select Allow local backend for this test plan. This bypass is limited to plan and plan-operation. Workspace files pass between phases, but local state is not reused by separate runs; use this option for disposable testing.
 
 ## GitHub installation setup
 

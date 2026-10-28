@@ -4,7 +4,7 @@ When GitHub App authentication is configured, Composer can discover stack reposi
 
 ## Sign in and choose a stack
 
-Sign in with GitHub, then use **Connect GitHub** to install the configured App on a personal account or organization. GitHub lets you grant access to all repositories or selected repositories. **Manage repository access** opens the installation settings to change that selection. Composer automatically discovers repositories accessible to both the signed-in user and the App, grouped by account. Platform registration and repository topics are not required. Composer discovers conventional stack files such as `stack.yaml`, `stack.yml`, `stack.json`, and their `*.stack.yaml`, `*.stack.yml`, or `*.stack.json` variants.
+Sign in with GitHub, then use **Connect GitHub** to install the configured App on a personal account or organization. GitHub lets you grant access to all repositories or selected repositories. **Manage repository access** opens the installation settings to change that selection. Composer discovers repositories accessible to both the signed-in user and the App that match the administrator's [discovery rules](settings.md#github-connection). Defaults match custom property `stacksmith=stack` or topic `stacksmith-stack`; personal repositories use topics. No separate platform registration is required. Composer discovers conventional stack files such as `stack.yaml`, `stack.yml`, `stack.json`, and their `*.stack.yaml`, `*.stack.yml`, or `*.stack.json` variants.
 
 Repositories where the user has read access can be opened for review. Creating a pull request requires push permission to that repository and, in platform mode, the platform author capability. Fork-based contributions are not supported.
 

@@ -52,6 +52,8 @@ Manual runs can provide `tags` to target infrastructure components matching ever
 
 `POST /runs/{id}/authorize` permits credentialed execution of an exact PR revision. `POST /runs/{id}/approve` approves a successfully previewed deployment. `POST /runs/{id}/cancel` requests cancellation. `POST /runs/{id}/resolve` requires a reconciliation note and releases an uncertain run's deployment lock after operator inspection; it never resumes execution.
 
+`DELETE /runs/{id}` requires an administrator browser session and a terminal status (`succeeded`, `failed`, `cancelled`, `expired`, or `uncertain`). It permanently deletes the run, associated artifacts, phase claims, credential sessions, and any retained lock, returning `{"deleted":true}`. Active runs return `409`; missing runs return `404`. Audit events are retained. Deleting an uncertain run releases its lock without recording reconciliation; inspect and reconcile infrastructure first.
+
 `GET /repositories/{owner}/{repo}/environments/{name}/operations` requires view access to the environment. It inspects the latest default-branch commit in an isolated execution and returns its `revision` and an `operations` list containing stack-local `name`, `description`, and `stacks` fields. Discovery uses Stacksmith's environment and stack metadata APIs without planning infrastructure. An empty run request's `operations` list selects all declared operations; a nonempty list selects those names and their dependencies.
 
 Interactive platform administrators can set `allow_local_backend: true` on non-mutating plans for disposable local-backend testing. Apply and destroy requests reject this option. Workspace files pass between phases within a run; local state is not reused by later runs.
@@ -60,8 +62,18 @@ Interactive platform administrators can set `allow_local_backend: true` on non-m
 
 Repository discovery replaces registration. `GET /api/repository-discovery` lists repositories accessible to the signed-in user and App. `GET /api/github-connection` returns the installation URL and accessible installation management links. `GET /api/auth/setup` verifies installation returns. Administrator `POST /api/v1/repositories/refresh` reconciles the complete App catalog. Administrator `POST /api/v1/repositories/{owner}/{repo}/deployment` accepts `{"enabled":true}` or `{"enabled":false}` to control deployment processing. New records inherit platform configuration and start with deployments disabled. The former `POST /api/v1/repositories` registration endpoint has been removed. Per-repository environment, grant, and secret-binding endpoints configure execution. Secret read responses contain metadata only.
 
+Discovery applies the administrator-controlled filter to user discovery and catalog refresh. `GET /api/v1/repository-filter` reads it; `PUT` replaces it with `{"properties":{"stacksmith":"stack"},"topics":["stacksmith-stack"]}`. Both require an administrator browser session. Each collection supports up to 32 entries, and matching any property or topic includes a repository. Saving does not refresh the catalog; call `POST /api/v1/repositories/refresh` afterward. Empty collections match no repositories.
+
+Deployment setup uses `GET /repositories/{owner}/{repo}/deployment-configuration` to read settings and `POST /repositories/{owner}/{repo}/deployment-discovery` to inspect candidate roots at the default-branch revision. `PUT /repositories/{owner}/{repo}/deployment-configuration` applies reviewed settings with that full `revision`, `gitops_root`, `discovery_mode`, `locked`, `automatic`, optional `lock_key`, and `deactivate_missing`. A changed revision or unapproved removal of active environments returns `409`. Removed environments are deactivated without deleting history or credentials.
+
+`GET /api/platform?repository={owner}/{repo}` provides authored layer summaries for the settings page, not merged runtime values. Each `layers` entry contains its `reference` and `summary`; credential-like source fields are redacted. Use `/api/resolution` for resolved draft inspection.
+
 Platform administrators read and update shared configuration through `GET /configuration` and `POST /configuration`. Policies contain `mode` and an ordered `refs` list of GitHub configuration file references pinned to full commit SHAs. Repository administrators use `GET /repositories/{owner}/{repo}/configuration` and `POST` on the same endpoint. Repository modes are `inherit`, `append`, and `replace`; `inherit` requires an empty `refs` list, while platform defaults use `replace`. Runs capture the effective layers; changing those layers invalidates queued execution and pending approvals that captured the previous policy.
 
+
+## Audit events
+
+`GET /api/v1/audit` lists platform events with exact `repository`, `run_id`, `actor`, and `action` filters, plus `page` and `page_size` pagination. `GET /api/v1/runs/{id}/audit` lists a run's events. Both require an administrator browser session; API tokens cannot read them. Metadata excludes secret values. See [Settings](settings.md#account-and-administration) for the audit page.
 
 ## Service authentication
 

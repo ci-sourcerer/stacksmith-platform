@@ -47,7 +47,7 @@ To start only the database UI and its database dependency, use `uv run poe stack
 
 ## Fresh-baseline transition
 
-The first Alembic revision represents the complete current schema. Databases created by the old initializer are intentionally unsupported and rejected without changing their contents. For disposable Compose data, explicitly run `poe reset-db` and then restart. For local SQLite authoring, stop the application and move aside its configured database file before restarting. Preserve any data you need before doing so. Hosted PostgreSQL requires an explicitly provisioned fresh database; do not stamp an old schema as current.
+The first Alembic revision defines the baseline; later revisions evolve it. Always upgrade to `head` rather than treating the baseline as the current schema. Databases created by the old initializer are intentionally unsupported and rejected without changing their contents. For disposable Compose data, explicitly run `poe reset-db` and then restart. For local SQLite authoring, stop the application and move aside its configured database file before restarting. Preserve any data you need before doing so. Hosted PostgreSQL requires an explicitly provisioned fresh database; do not stamp an old schema as current.
 
 ## Ownership and future extraction
 
