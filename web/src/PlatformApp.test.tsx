@@ -1025,7 +1025,7 @@ it("keeps inactive target history accessible without offering launch", async () 
   ).toBe(true);
 });
 
-it("retries audit failures, renders expandable details, and preserves filters during pagination", async () => {
+it("retries audit failures, renders inline summaries, and preserves filters during pagination", async () => {
   const original = vi.mocked(api).getMockImplementation()!;
   let failing = true;
   vi.mocked(api).mockImplementation(async (...args) => {
@@ -1056,13 +1056,10 @@ it("retries audit failures, renders expandable details, and preserves filters du
   await click("button", "Retry");
   expect(document.body.textContent).toContain("run created");
   expect(document.querySelector('a[href*="run=run-test"]')).toBeTruthy();
-  expect(
-    document.querySelector(".audit-table details")?.hasAttribute("open"),
-  ).toBe(false);
-  await click("summary", "View details");
-  expect(
-    document.querySelector(".audit-table details")?.hasAttribute("open"),
-  ).toBe(true);
+  expect(document.querySelector(".audit-table details")).toBeNull();
+  expect(document.querySelector(".audit-event-summary")?.textContent).toBe(
+    "a".repeat(10),
+  );
   await click('button[aria-label="Next audit events page"]');
   expect(window.location.search).toContain("page=2");
   expect(window.location.search).toContain("actor=operator");

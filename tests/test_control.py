@@ -540,6 +540,23 @@ def test_platform_audit_filters_and_deterministic_pagination(platform):
     assert platform.client.get("/api/v1/audit?page_size=101").status_code == 422
 
 
+def test_audit_resolves_phase_names_without_exposing_run_spec(platform):
+    identifier = _create(platform, action="plan").json()["id"]
+    with platform.database.transaction() as connection:
+        audit(connection, "execution", "phase.claimed", identifier, phase=0)
+        audit(connection, "execution", "phase.started", identifier, phase="plan")
+        audit(connection, "execution", "phase.claimed", identifier, phase=999)
+        audit(connection, "execution", "phase.claimed", "missing", phase=0)
+    events = platform.client.get("/api/v1/audit?actor=execution").json()["items"]
+    assert any(event["detail"].get("phase_name") == "prepare" for event in events)
+    assert all("run_spec" not in event for event in events)
+    assert all(
+        "phase_name" not in event["detail"]
+        for event in events
+        if event["detail"]["phase"] != 0 or event["run"] == "missing"
+    )
+
+
 def test_audit_scope_is_recorded_without_secret_values(platform):
     identifier = _create(platform, action="plan").json()["id"]
     with platform.database.transaction() as connection:

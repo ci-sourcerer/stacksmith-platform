@@ -368,22 +368,9 @@
   grid-template-columns: repeat(4, minmax(0, 1fr));
   gap: 16px;
 }
-.audit-event-details {
-  margin: 12px 0 0;
-}
-.audit-event-details > div + div {
-  margin-top: 8px;
-}
-.audit-event-details dt {
-  font-weight: 600;
-}
-.audit-event-details dd {
-  margin: 4px 0 0;
+.audit-event-summary {
   overflow-wrap: anywhere;
   white-space: pre-wrap;
-}
-.audit-table summary {
-  cursor: pointer;
 }
 @media (max-width: 800px) {
   .audit-filters {

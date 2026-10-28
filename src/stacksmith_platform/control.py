@@ -2329,9 +2329,10 @@ def list_audit(
                 select(func.count()).select_from(audits).where(*filters)
             ).scalar_one(),
             "items": [
-                dict(event)
+                _audit_event_summary(event)
                 for event in connection.execute(
-                    audits.select()
+                    select(audits, runs.c.spec.label("run_spec"))
+                    .select_from(audits.outerjoin(runs, audits.c.run == runs.c.id))
                     .where(*filters)
                     .order_by(audits.c.created.desc(), audits.c.id.desc())
                     .offset((page - 1) * page_size)
@@ -2339,6 +2340,19 @@ def list_audit(
                 ).mappings()
             ],
         }
+
+
+def _audit_event_summary(event):
+    result = dict(event)
+    spec = result.pop("run_spec") or {}
+    phase = (result["detail"] or {}).get("phase")
+    if (
+        result["action"].startswith("phase.")
+        and type(phase) is int
+        and 0 <= phase < len(spec.get("phases", []))
+    ):
+        result["detail"] = {**result["detail"], "phase_name": spec["phases"][phase]}
+    return result
 
 
 @runs_router.get("/runs/{run_id}/audit")

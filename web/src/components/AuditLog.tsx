@@ -29,6 +29,59 @@ const filters = [
   ["action", "Event"],
 ] as const;
 
+function summaryValue(value: unknown): string {
+  if (typeof value === "string") return value.trim();
+  if (typeof value === "boolean" || typeof value === "number")
+    return String(value);
+  if (Array.isArray(value))
+    return value.map(summaryValue).filter(Boolean).join(", ");
+  return "";
+}
+
+export function auditSummary(
+  event: Pick<AuditEvent, "action" | "detail">,
+): string {
+  const detail = event.detail ?? {};
+  if (event.action.startsWith("phase."))
+    return (
+      summaryValue(detail.phase_name) ||
+      (typeof detail.phase === "string" ? detail.phase.trim() : "")
+    );
+  if (event.action.startsWith("run."))
+    return event.action === "run.created"
+      ? [summaryValue(detail.revision).slice(0, 10), summaryValue(detail.event)]
+          .filter(Boolean)
+          .join(" · ")
+      : summaryValue(detail.note) || summaryValue(detail.message);
+  if (event.action.startsWith("secret."))
+    return [summaryValue(detail.name), summaryValue(detail.environment)]
+      .filter(Boolean)
+      .join(" · ");
+  if (event.action.startsWith("execution_credential."))
+    return [summaryValue(detail.provider), summaryValue(detail.environment)]
+      .filter(Boolean)
+      .join(" · ");
+  return [
+    "login",
+    "role",
+    "environment",
+    "scope",
+    "mode",
+    "refs",
+    "enabled",
+    "reason",
+    "root",
+    "resolved_mode",
+    "token",
+  ]
+    .map((key) => {
+      const value = summaryValue(detail[key]);
+      return value ? `${key.replaceAll("_", " ")}: ${value}` : "";
+    })
+    .filter(Boolean)
+    .join(" · ");
+}
+
 function positiveInteger(
   value: string | null,
   fallback: number,
@@ -152,7 +205,7 @@ export function AuditLog() {
                 <th scope="col">Actor</th>
                 <th scope="col">Repository</th>
                 <th scope="col">Run</th>
-                <th scope="col">Details</th>
+                <th scope="col">Summary</th>
               </tr>
             </thead>
             <tbody>
@@ -177,28 +230,8 @@ export function AuditLog() {
                         "—"
                       )}
                     </td>
-                    <td>
-                      {event.detail && Object.keys(event.detail).length ? (
-                        <details>
-                          <summary>View details</summary>
-                          <dl className="audit-event-details">
-                            {Object.entries(event.detail).map(
-                              ([key, value]) => (
-                                <div key={key}>
-                                  <dt>{key.replaceAll("_", " ")}</dt>
-                                  <dd>
-                                    {typeof value === "string"
-                                      ? value
-                                      : JSON.stringify(value)}
-                                  </dd>
-                                </div>
-                              ),
-                            )}
-                          </dl>
-                        </details>
-                      ) : (
-                        "No additional details"
-                      )}
+                    <td className="audit-event-summary">
+                      {auditSummary(event)}
                     </td>
                   </tr>
                 ))
