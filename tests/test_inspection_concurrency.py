@@ -115,6 +115,16 @@ def test_inspections_overlap_and_complete_out_of_order(platform):
     assert not platform.driver.executions
 
 
+def test_regular_tick_can_leave_inspections_for_the_separate_poll(platform):
+    _enqueue(platform, "inspection")
+    platform.worker.tick(inspections=False)
+    assert _read(platform, "inspection")["status"] == "queued"
+    assert platform.driver.launches == 0
+    platform.worker._reconcile_inspections()
+    assert _read(platform, "inspection")["status"] == "running"
+    assert platform.driver.launches == 1
+
+
 @pytest.mark.parametrize("inspection_first", [False, True])
 def test_inspections_and_ordinary_runs_both_progress(platform, inspection_first):
     if inspection_first:

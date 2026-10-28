@@ -112,17 +112,28 @@ class GitHubClient:
         """Return the authenticated GitHub user."""
         return self._request("GET", "/user")
 
-    def repositories(self) -> list[dict[str, Any]]:
+    def repositories(self, repository: str | None = None) -> list[dict[str, Any]]:
         """Discover repositories accessible to both the user and app.
+
+        Args:
+            repository: Optional full repository name to inspect exclusively.
 
         Returns:
             Repository summaries, including current push permission.
+
+        Raises:
+            ComposerError: GitHub discovery fails or exceeds its page limit.
         """
         repositories = {}
         for installation in self._pages("/user/installations", "installations"):
             for repo in self._pages(
                 f"/user/installations/{installation['id']}/repositories", "repositories"
             ):
+                if (
+                    repository is not None
+                    and repo["full_name"].casefold() != repository.casefold()
+                ):
+                    continue
                 repositories[repo["id"]] = {
                     "github_id": str(repo["id"]),
                     "installation_id": installation["id"],
@@ -138,7 +149,11 @@ class GitHubClient:
                     "writable": repo.get("permissions", {}).get("push", False)
                     and not repo.get("archived", False),
                 }
-        discovered = sorted(repositories.values(), key=lambda item: item["name"])
+        return self._accessible_repositories(
+            sorted(repositories.values(), key=lambda item: item["name"])
+        )
+
+    def _accessible_repositories(self, discovered):
         accessible = []
         for item in discovered:
             owner, name = item["name"].split("/", 1)

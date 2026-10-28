@@ -181,6 +181,97 @@ def test_review_reuses_preflight_discovery_but_rechecks_access_after_inspection(
         response = platform.client.post("/api/review", json=draft)
         assert response.status_code == 200, response.text
         assert discovery.call_count == expected
+    assert all(call.args[2] == "acme/service" for call in discovery.call_args_list)
+
+
+@pytest.mark.parametrize("environment", [None, "dev"])
+def test_review_logs_stage_durations_without_source_or_credentials(
+    platform, snapshot, monkeypatch, caplog, environment
+):
+    monkeypatch.setattr(
+        "stacksmith_platform.adapter.StacksmithAdapter.review",
+        Mock(
+            return_value={
+                "source": snapshot["source"],
+                "catalog": {"database": {"outputs": []}},
+                "associations": {"rules": [], "applications": []},
+            }
+        ),
+    )
+    with caplog.at_level("INFO", logger="stacksmith_platform.app"):
+        response = platform.client.post(
+            "/api/review",
+            json={
+                "snapshot": "signed",
+                "environment": environment,
+                "components": {"database": {"type": "database"}},
+            },
+        )
+    assert response.status_code == 200
+    record = next(
+        record
+        for record in caplog.records
+        if record.message.startswith("Review completed:")
+    )
+    assert record.args[0] >= sum(record.args[1].values())
+    assert set(record.args[1]) == {"preflight", "inspection", "completion", "graph"}
+    assert all(duration >= 0 for duration in record.args[1].values())
+    assert snapshot["source"] not in record.message
+    assert "signed" not in record.message
+    assert "timings" not in response.json()
+
+
+@pytest.mark.parametrize("matches_filter", [False, True])
+def test_targeted_review_preserves_filter_and_subset_synchronization(
+    platform, snapshot, monkeypatch, matches_filter
+):
+    from test_control import UserGitHub
+
+    from stacksmith_platform.database import repositories
+
+    monkeypatch.setattr(
+        UserGitHub,
+        "repositories",
+        lambda self, repository=None: [
+            {
+                "name": "acme/service",
+                "github_id": "1",
+                "installation_id": 1,
+                "default_branch": "main",
+                "topics": ["stacksmith-stack"] if matches_filter else [],
+                "custom_properties": {},
+            }
+        ],
+    )
+    inspection = Mock(
+        return_value={
+            "source": snapshot["source"],
+            "catalog": {"database": {"outputs": []}},
+            "associations": {"rules": []},
+        }
+    )
+    monkeypatch.setattr(
+        "stacksmith_platform.adapter.StacksmithAdapter.review", inspection
+    )
+    with platform.database.transaction() as connection:
+        connection.execute(
+            repositories.insert().values(
+                id="acme/other", github_id="2", enabled=1, installation=1
+            )
+        )
+    response = platform.client.post(
+        "/api/review",
+        json={
+            "snapshot": "signed",
+            "components": {"database": {"type": "database"}},
+        },
+    )
+    assert response.status_code == (200 if matches_filter else 403), response.text
+    assert inspection.call_count == int(matches_filter)
+    with platform.database.transaction() as connection:
+        assert row(connection, repositories, "acme/other")["enabled"] == 1
+        if matches_filter:
+            assert row(connection, repositories, "acme/service")["github_id"] == "1"
 
 
 @pytest.mark.parametrize("environment", [None, "dev"])

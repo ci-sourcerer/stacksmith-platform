@@ -30,6 +30,7 @@ supervisor:
   cpu: "1"
   memory: 1Gi
 inspectionWaitTimeout: 180
+inspectionPollInterval: 0.25
 recovery:
   resources:
     requests: {cpu: 100m, memory: 256Mi}

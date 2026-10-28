@@ -439,12 +439,17 @@ def _draft_modified(snapshot, draft):
 
 def _review(request: Request, draft: Draft) -> tuple[dict[str, Any], dict[str, Any]]:
     started = perf_counter()
+    timings = {}
     snapshot, edits = _draft_edits(request, draft)
     context = _inspection_context(request, snapshot, draft.environment)
     adapter = _adapter(request, snapshot.get("repository"), context)
+    timings["preflight"] = perf_counter() - started
+    stage_started = perf_counter()
     result = adapter.review(
         snapshot["source"], edits, snapshot["path"], _github_token(request)
     )
+    timings["inspection"] = perf_counter() - stage_started
+    stage_started = perf_counter()
     source = result["source"]
     _check_draft_source(request, snapshot, source)
     catalog = result["catalog"]
@@ -452,6 +457,8 @@ def _review(request: Request, draft: Draft) -> tuple[dict[str, Any], dict[str, A
     document = associations.pop("_document", None) or load_document(source)
     validate_root_references(document, catalog)
     _check_inspection_context(request, context, adapter)
+    timings["completion"] = perf_counter() - stage_started
+    stage_started = perf_counter()
     result = {
         "source": source,
         "diff": source_diff(snapshot["source"], source, snapshot["path"]),
@@ -465,8 +472,11 @@ def _review(request: Request, draft: Draft) -> tuple[dict[str, Any], dict[str, A
         ),
         "context": _context_metadata(context),
     }
+    timings["graph"] = perf_counter() - stage_started
     logging.getLogger(__name__).info(
-        "Review completed: total_seconds=%.3f", perf_counter() - started
+        "Review completed: total_seconds=%.3f stage_seconds=%s",
+        perf_counter() - started,
+        timings,
     )
     return snapshot, result
 
@@ -744,8 +754,12 @@ def repository_discovery(
     return _repository_discovery(request, client)
 
 
-def _repository_discovery(request, client):
-    discovered = client.repositories()
+def _repository_discovery(request, client, repository=None):
+    discovered = (
+        client.repositories(repository=repository)
+        if repository is not None
+        else client.repositories()
+    )
     with request.app.state.database.transaction() as connection:
         discovered = filtered(discovered, get_filter(connection))
     if not discovered:
@@ -1188,11 +1202,15 @@ def _authoring_access(request, repository):
     if not request.app.state.settings.execution_enabled:
         return
     if getattr(request.state, "authoring_repositories", None) is None:
-        request.state.authoring_repositories = {
-            item["name"]
-            for item in _repository_discovery(request, _github(request))["repositories"]
-        }
+        request.state.authoring_repositories = {}
     if repository not in request.state.authoring_repositories:
+        request.state.authoring_repositories[repository] = any(
+            item["name"] == repository
+            for item in _repository_discovery(request, _github(request), repository)[
+                "repositories"
+            ]
+        )
+    if not request.state.authoring_repositories[repository]:
         raise ComposerError(
             "This repository is unavailable to your GitHub account and App.", 403
         )

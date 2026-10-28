@@ -107,6 +107,31 @@ def _payload(platform, run):
     )
 
 
+@pytest.mark.parametrize(
+    ("action", "override", "expected"),
+    [("inspection", None, 0.125), ("plan", None, 2), ("inspection", 0, 0)],
+)
+def test_supervisor_poll_interval_depends_on_action(
+    platform, monkeypatch, action, override, expected
+):
+    dispatcher = _kubernetes(platform)
+    identifier = _create(platform, action="plan").json()["id"]
+    _set_run(platform, identifier, action=action)
+    dispatcher.dispatch(identifier)
+    host = _host(platform)
+    host.settings.inspection_poll_interval = 0.125
+    sleeps = []
+
+    def sleep(interval):
+        sleeps.append(interval)
+        _set_run(platform, identifier, status="cancelled")
+
+    monkeypatch.setattr("stacksmith_platform.supervision.time.sleep", sleep)
+    monkeypatch.setattr(host, "reconcile_run", lambda *args: True)
+    supervise(host, identifier, 1, interval=override)
+    assert sleeps == [expected]
+
+
 def test_compose_worker_does_not_take_kubernetes_runs(platform):
     _kubernetes(platform)
     identifier = _create(platform, action="plan").json()["id"]

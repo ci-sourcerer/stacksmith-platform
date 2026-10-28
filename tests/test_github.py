@@ -206,7 +206,109 @@ def test_discovery_lists_repositories_deduplicates_and_marks_archived_read_only(
     assert repositories[1]["writable"] is True
 
 
-def test_personal_installation_uses_topics_without_requesting_custom_properties():
+@pytest.mark.parametrize(
+    ("repository", "expected"),
+    [
+        ("org/stacks", ["org/stacks"]),
+        ("ORG/STACKS", ["org/stacks"]),
+        ("org/absent", []),
+    ],
+)
+def test_targeted_discovery_only_enriches_matching_membership(repository, expected):
+    fixture = DiscoveryFixture()
+    requests = []
+
+    def handle(request):
+        requests.append(request.url.path)
+        return fixture.handle(request)
+
+    assert [
+        item["name"]
+        for item in GitHubClient("token", _transport(handle)).repositories(repository)
+    ] == expected
+    assert [path for path in requests if path.startswith("/repos/")] == (
+        ["/repos/org/stacks", "/repos/org/stacks/properties/values"] if expected else []
+    )
+
+
+@pytest.mark.parametrize("paginated", ["installations", "repositories"])
+def test_targeted_discovery_searches_later_pages(paginated):
+    fixture = DiscoveryFixture()
+    requests = []
+
+    def handle(request):
+        requests.append((request.url.path, request.url.params.get("page")))
+        page = int(request.url.params.get("page", "1"))
+        if request.url.path == "/user/installations":
+            if paginated == "installations" and page == 1:
+                return httpx.Response(
+                    200,
+                    json={"installations": [{"id": index} for index in range(1, 101)]},
+                )
+            return httpx.Response(200, json={"installations": [{"id": 101}]})
+        if request.url.path.startswith("/user/installations/"):
+            if paginated == "repositories" and page == 1:
+                return httpx.Response(
+                    200,
+                    json={
+                        "repositories": [
+                            {"full_name": f"org/other-{index}"} for index in range(100)
+                        ]
+                    },
+                )
+            if request.url.path != "/user/installations/101/repositories":
+                return httpx.Response(200, json={"repositories": []})
+        return fixture.handle(request)
+
+    assert [
+        item["name"]
+        for item in GitHubClient("token", _transport(handle)).repositories("org/stacks")
+    ] == ["org/stacks"]
+    assert (
+        "/user/installations"
+        if paginated == "installations"
+        else "/user/installations/101/repositories",
+        "2",
+    ) in requests
+
+
+def test_targeted_discovery_preserves_custom_properties():
+    fixture = DiscoveryFixture()
+
+    def handle(request):
+        if request.url.path == "/repos/org/stacks/properties/values":
+            return httpx.Response(
+                200, json=[{"property_name": "stacksmith", "value": "stack"}]
+            )
+        return fixture.handle(request)
+
+    assert GitHubClient("token", _transport(handle)).repositories("org/stacks")[0][
+        "custom_properties"
+    ] == {"stacksmith": "stack"}
+
+
+@pytest.mark.parametrize("status", [403, 404])
+def test_targeted_discovery_checks_current_repository_access(status):
+    fixture = DiscoveryFixture()
+
+    def handle(request):
+        if request.url.path == "/repos/org/stacks":
+            return httpx.Response(status)
+        return fixture.handle(request)
+
+    if status == 403:
+        with pytest.raises(ComposerError, match="access was denied"):
+            GitHubClient("token", _transport(handle)).repositories("org/stacks")
+    else:
+        assert (
+            GitHubClient("token", _transport(handle)).repositories("org/stacks") == []
+        )
+
+
+@pytest.mark.parametrize("repository", [None, "org/stacks"])
+def test_personal_installation_uses_topics_without_requesting_custom_properties(
+    repository,
+):
     fixture = DiscoveryFixture()
 
     def handle(request):
@@ -219,13 +321,14 @@ def test_personal_installation_uses_topics_without_requesting_custom_properties(
             return httpx.Response(200, json={"topics": ["stacksmith-stack"]})
         return fixture.handle(request)
 
-    repositories = GitHubClient("token", _transport(handle)).repositories()
-    assert len(repositories) == 3
+    repositories = GitHubClient("token", _transport(handle)).repositories(repository)
+    assert len(repositories) == (3 if repository is None else 1)
     assert all(item["topics"] == ["stacksmith-stack"] for item in repositories)
     assert all(item["custom_properties"] == {} for item in repositories)
 
 
-def test_unavailable_custom_properties_do_not_block_topic_discovery():
+@pytest.mark.parametrize("repository", [None, "org/stacks"])
+def test_unavailable_custom_properties_do_not_block_topic_discovery(repository):
     fixture = DiscoveryFixture()
 
     def handle(request):
@@ -235,8 +338,8 @@ def test_unavailable_custom_properties_do_not_block_topic_discovery():
             return httpx.Response(200, json={"topics": ["stacksmith-stack"]})
         return fixture.handle(request)
 
-    repositories = GitHubClient("token", _transport(handle)).repositories()
-    assert len(repositories) == 3
+    repositories = GitHubClient("token", _transport(handle)).repositories(repository)
+    assert len(repositories) == (3 if repository is None else 1)
     assert all(item["custom_properties"] == {} for item in repositories)
     assert all(item["topics"] == ["stacksmith-stack"] for item in repositories)
 

@@ -14,7 +14,10 @@ from .worker import RunReconciler
 
 
 def supervise(
-    reconciler: RunReconciler, run_id: str, generation: int, interval: float = 2
+    reconciler: RunReconciler,
+    run_id: str,
+    generation: int,
+    interval: float | None = None,
 ) -> None:
     """Supervise one active run without waiting for approval or unrelated work.
 
@@ -22,7 +25,8 @@ def supervise(
         reconciler: Configured lifecycle reconciler with a unique owner identity.
         run_id: Target run identifier.
         generation: Current supervisor generation.
-        interval: Active execution polling interval.
+        interval: Optional polling override. Inspections otherwise use the configured
+            inspection interval; other actions use two seconds.
 
     Returns:
         None.
@@ -40,7 +44,13 @@ def supervise(
             if not reconciler.reconcile_run(run_id, generation):
                 return
             _observe_supervisor(reconciler, run_id, generation, False)
-            time.sleep(interval)
+            time.sleep(
+                interval
+                if interval is not None
+                else reconciler.settings.inspection_poll_interval
+                if run["action"] == "inspection"
+                else 2
+            )
     finally:
         _observe_supervisor(reconciler, run_id, generation, True)
 

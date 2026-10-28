@@ -17,6 +17,19 @@ def test_inspection_concurrency_must_be_positive(value):
         Settings(_env_file=None, inspection_concurrency=value)
 
 
+def test_inspection_poll_interval_default_and_environment(monkeypatch):
+    monkeypatch.delenv("STACKSMITH_PLATFORM_INSPECTION_POLL_INTERVAL", raising=False)
+    assert Settings(_env_file=None).inspection_poll_interval == 0.25
+    monkeypatch.setenv("STACKSMITH_PLATFORM_INSPECTION_POLL_INTERVAL", "0.5")
+    assert Settings(_env_file=None).inspection_poll_interval == 0.5
+
+
+@pytest.mark.parametrize("value", [0, -0.25, float("inf"), float("nan")])
+def test_inspection_poll_interval_must_be_positive_and_finite(value):
+    with pytest.raises(ValidationError):
+        Settings(_env_file=None, inspection_poll_interval=value)
+
+
 def test_unrelated_dotenv_values_do_not_break_platform_configuration(tmp_path):
     dotenv = tmp_path / ".env"
     dotenv.write_text(

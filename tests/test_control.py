@@ -127,7 +127,9 @@ class UserGitHub:
             "custom_properties": {"stacksmith": "stack"},
         }
 
-    def repositories(self):
+    def repositories(self, repository=None):
+        if repository not in {None, "acme/service"}:
+            return []
         return [
             {
                 "name": "acme/service",

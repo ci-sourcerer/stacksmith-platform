@@ -54,6 +54,11 @@ def test_chart_uses_temporary_supervisors_and_bounded_recovery():
     recovery = cron["jobTemplate"]["spec"]["template"]["spec"]
     assert recovery["serviceAccountName"] == "test-supervisor"
     assert recovery["containers"][0]["command"] == ["stacksmith-platform-maintain"]
+    for container in (api["containers"][0], recovery["containers"][0]):
+        assert {
+            "name": "STACKSMITH_PLATFORM_INSPECTION_POLL_INTERVAL",
+            "value": "0.25",
+        } in container["env"]
     assert (
         recovery["containers"][0]["envFrom"][1]["secretRef"]["name"]
         == "stacksmith-platform-supervisor-database"
@@ -71,6 +76,18 @@ def test_chart_uses_temporary_supervisors_and_bounded_recovery():
         )["automountServiceAccountToken"]
         is False
     )
+
+
+def test_chart_exposes_inspection_poll_interval_override():
+    for resource in _render("--set", "inspectionPollInterval=0.5"):
+        if (
+            resource["kind"] == "Deployment"
+            and resource["metadata"]["name"] == "test-api"
+        ):
+            assert {
+                "name": "STACKSMITH_PLATFORM_INSPECTION_POLL_INTERVAL",
+                "value": "0.5",
+            } in resource["spec"]["template"]["spec"]["containers"][0]["env"]
 
 
 def test_frontend_owns_ingress_without_receiving_api_secrets():

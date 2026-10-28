@@ -60,10 +60,19 @@ def _request_shutdown(signum, frame):
 
 
 def _serve(worker, stop):
+    next_tick = time.monotonic()
+    next_inspection = next_tick
     try:
         while not stop.is_set():
-            worker.tick()
-            stop.wait(2)
+            if time.monotonic() >= next_tick:
+                worker.tick(inspections=False)
+                next_tick = time.monotonic() + 2
+            if not stop.is_set() and time.monotonic() >= next_inspection:
+                worker._reconcile_inspections()
+                next_inspection = (
+                    time.monotonic() + worker.settings.inspection_poll_interval
+                )
+            stop.wait(max(0, min(next_tick, next_inspection) - time.monotonic()))
     finally:
         with worker.database.transaction() as connection:
             connection.execute(
@@ -1262,8 +1271,11 @@ class RunReconciler:
 class Worker(RunReconciler):
     """Persistent Compose host for the shared run reconciler."""
 
-    def tick(self) -> None:
+    def tick(self, inspections: bool = True) -> None:
         """Heartbeat, perform maintenance, and reconcile available Compose work.
+
+        Args:
+            inspections: Whether to also reconcile inspections in this pass.
 
         Returns:
             None.
@@ -1278,7 +1290,8 @@ class Worker(RunReconciler):
                     driver=self.settings.runner,
                 )
             )
-        self._reconcile_inspections()
+        if inspections:
+            self._reconcile_inspections()
         self._reconcile_matching([runs.c.action != "inspection"])
 
     def _reconcile_inspections(self):
