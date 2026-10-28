@@ -7,6 +7,12 @@ from stacksmith_platform.errors import ComposerError
 from stacksmith_platform.github import GitHubClient
 
 
+def _transport(handler):
+    return httpx.Client(
+        base_url="https://api.github.com", transport=httpx.MockTransport(handler)
+    )
+
+
 class GitHubFixture:
     """Model GitHub's branch and pull-request APIs for write-path tests."""
 
@@ -65,7 +71,7 @@ SNAPSHOT = {
 
 def test_pr_writes_exactly_one_file_to_a_new_branch_and_retries_reuse_pr():
     fixture = GitHubFixture()
-    client = GitHubClient("test-token", httpx.MockTransport(fixture.handle))
+    client = GitHubClient("test-token", _transport(fixture.handle))
     source = "name: changed\ncomponents: {}\n"
     first = client.create_pr(SNAPSHOT, source)
     request_count = len(fixture.requests)
@@ -96,7 +102,7 @@ def test_pr_writes_exactly_one_file_to_a_new_branch_and_retries_reuse_pr():
 
 def test_pr_can_be_created_as_a_draft():
     fixture = GitHubFixture()
-    GitHubClient("token", httpx.MockTransport(fixture.handle)).create_pr(
+    GitHubClient("token", _transport(fixture.handle)).create_pr(
         SNAPSHOT, "changed", draft=True
     )
     writes = [request for request in fixture.requests if request.method == "POST"]
@@ -106,7 +112,7 @@ def test_pr_can_be_created_as_a_draft():
 @pytest.mark.parametrize("environment", [None, "dev"])
 def test_pr_records_inspection_context_and_uses_it_for_retry_identity(environment):
     fixture = GitHubFixture()
-    client = GitHubClient("token", httpx.MockTransport(fixture.handle))
+    client = GitHubClient("token", _transport(fixture.handle))
     context = {
         "mode": "deployment" if environment else "stack_preview",
         "environment": environment,
@@ -137,9 +143,7 @@ def test_changed_base_prevents_all_writes():
     fixture = GitHubFixture()
     fixture.current_head = "advanced-sha"
     with pytest.raises(ComposerError, match="base branch changed"):
-        GitHubClient("token", httpx.MockTransport(fixture.handle)).create_pr(
-            SNAPSHOT, "changed"
-        )
+        GitHubClient("token", _transport(fixture.handle)).create_pr(SNAPSHOT, "changed")
     assert all(request.method == "GET" for request in fixture.requests)
 
 
@@ -147,9 +151,7 @@ def test_lost_write_access_prevents_all_writes():
     fixture = GitHubFixture()
     fixture.writable = False
     with pytest.raises(ComposerError, match="write access"):
-        GitHubClient("token", httpx.MockTransport(fixture.handle)).create_pr(
-            SNAPSHOT, "changed"
-        )
+        GitHubClient("token", _transport(fixture.handle)).create_pr(SNAPSHOT, "changed")
     assert all(request.method == "GET" for request in fixture.requests)
 
 
@@ -193,7 +195,7 @@ class DiscoveryFixture:
 
 def test_discovery_lists_repositories_deduplicates_and_marks_archived_read_only():
     repositories = GitHubClient(
-        "token", httpx.MockTransport(DiscoveryFixture().handle)
+        "token", _transport(DiscoveryFixture().handle)
     ).repositories()
     assert [repo["name"] for repo in repositories] == [
         "org/archived",
@@ -217,7 +219,7 @@ def test_personal_installation_uses_topics_without_requesting_custom_properties(
             return httpx.Response(200, json={"topics": ["stacksmith-stack"]})
         return fixture.handle(request)
 
-    repositories = GitHubClient("token", httpx.MockTransport(handle)).repositories()
+    repositories = GitHubClient("token", _transport(handle)).repositories()
     assert len(repositories) == 3
     assert all(item["topics"] == ["stacksmith-stack"] for item in repositories)
     assert all(item["custom_properties"] == {} for item in repositories)
@@ -233,7 +235,7 @@ def test_unavailable_custom_properties_do_not_block_topic_discovery():
             return httpx.Response(200, json={"topics": ["stacksmith-stack"]})
         return fixture.handle(request)
 
-    repositories = GitHubClient("token", httpx.MockTransport(handle)).repositories()
+    repositories = GitHubClient("token", _transport(handle)).repositories()
     assert len(repositories) == 3
     assert all(item["custom_properties"] == {} for item in repositories)
     assert all(item["topics"] == ["stacksmith-stack"] for item in repositories)
@@ -249,7 +251,7 @@ def test_disappearing_repository_does_not_block_other_repositories():
 
     assert [
         item["name"]
-        for item in GitHubClient("token", httpx.MockTransport(handle)).repositories()
+        for item in GitHubClient("token", _transport(handle)).repositories()
     ] == ["org/stacks", "org/unrelated"]
 
 
@@ -262,4 +264,4 @@ def test_custom_property_authentication_failures_still_surface():
         return fixture.handle(request)
 
     with pytest.raises(ComposerError, match="access was denied"):
-        GitHubClient("token", httpx.MockTransport(handle)).repositories()
+        GitHubClient("token", _transport(handle)).repositories()

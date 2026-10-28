@@ -37,7 +37,11 @@ def _fake_author(source, edits, path):
     for edit in edits:
         current = document
         for key in edit["path"][:-1]:
-            current = current.setdefault(key, {})
+            current = (
+                current[key]
+                if isinstance(current, list)
+                else current.setdefault(key, {})
+            )
         key = edit["path"][-1]
         if edit["action"] == "remove":
             current.pop(key, None)

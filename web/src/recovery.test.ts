@@ -25,6 +25,7 @@ describe("draft recovery", () => {
     const draft = createDraftHistory({
       components: { api: { type: "service", properties: { size: 2 } } },
       disabled: ["default-role"],
+      renames: [{ old: "api", new: "service" }],
       positions: { api: { x: 20, y: 40 } },
     }).present;
     const saved = JSON.stringify(recoveryRecord(snapshot, draft));

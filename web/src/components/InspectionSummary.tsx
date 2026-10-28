@@ -1,3 +1,4 @@
+import { ChevronDown, Layers } from "lucide-react";
 import type { InspectionContext } from "../types";
 
 export function InspectionSummary({
@@ -7,41 +8,61 @@ export function InspectionSummary({
 }) {
   if (!context) return null;
   return (
-    <details className="inspection-details">
+    <details className="inspection-summary">
       <summary>
-        Inspection context:{" "}
-        {context.mode === "deployment"
-          ? `deployment ${context.environment}`
-          : "stack preview"}
+        <Layers size={16} aria-hidden="true" />
+        <span>
+          Inspection context:{" "}
+          <span className="inspection-summary-mode">
+            {context.mode === "deployment"
+              ? `deployment ${context.environment}`
+              : "stack preview"}
+          </span>
+        </span>
+        <ChevronDown
+          className="inspection-summary-chevron"
+          size={16}
+          aria-hidden="true"
+        />
       </summary>
-      <p>
-        {context.mode === "deployment"
-          ? "Includes the selected deployment’s runfile, variables, and authorized preparation credentials."
-          : "Uses repository and platform configuration. Deployment variables and credentials are excluded."}
-      </p>
-      <p>Deployment planning remains separate.</p>
-      <dl>
-        <dt>Repository</dt>
-        <dd>{context.repository}</dd>
-        <dt>Source revision</dt>
-        <dd>
-          <code>{context.revision}</code>
-        </dd>
-        <dt>Stack file</dt>
-        <dd>
-          <code>{context.path}</code>
-        </dd>
-        <dt>Configuration revision</dt>
-        <dd>
-          <code>{context.config_revision}</code>
-        </dd>
-        {context.mode === "deployment" && (
-          <>
-            <dt>Deployment revision</dt>
-            <dd>{context.environment_revision}</dd>
-          </>
-        )}
-      </dl>
+      <div className="inspection-summary-content">
+        <p className="inspection-summary-description">
+          {context.mode === "deployment"
+            ? "Includes the selected deployment’s runfile, variables, and authorized preparation credentials."
+            : "Uses repository and platform configuration. Deployment variables and credentials are excluded."}{" "}
+          Deployment planning remains separate.
+        </p>
+        <dl>
+          <div>
+            <dt>Repository</dt>
+            <dd>{context.repository}</dd>
+          </div>
+          <div>
+            <dt>Source revision</dt>
+            <dd>
+              <code>{context.revision}</code>
+            </dd>
+          </div>
+          <div>
+            <dt>Stack file</dt>
+            <dd>
+              <code>{context.path}</code>
+            </dd>
+          </div>
+          <div>
+            <dt>Configuration revision</dt>
+            <dd>
+              <code>{context.config_revision}</code>
+            </dd>
+          </div>
+          {context.mode === "deployment" && (
+            <div>
+              <dt>Deployment revision</dt>
+              <dd>{context.environment_revision}</dd>
+            </div>
+          )}
+        </dl>
+      </div>
     </details>
   );
 }

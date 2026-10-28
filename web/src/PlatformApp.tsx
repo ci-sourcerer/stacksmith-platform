@@ -1,3 +1,4 @@
+import type { RunSummary } from "./types";
 import { useSettingsError } from "./useSettingsError";
 import {
   SettingsPageHeader,
@@ -118,15 +119,7 @@ type DeploymentDiscovery = {
   revision: string;
   deployments: DeploymentCandidate[];
 };
-type Run = {
-  id: string;
-  repository: string;
-  environment: string;
-  revision: string;
-  action: string;
-  actor: string;
-  status: string;
-  phase: number;
+type Run = RunSummary & {
   spec: {
     phases: string[];
     settings?: { discovery_mode: string };
@@ -140,9 +133,6 @@ type Run = {
     plan_digest?: string;
     logs?: string;
   };
-  created: number;
-  updated: number;
-  expires: number | null;
 };
 type EffectiveAccess = {
   administrator: boolean;
@@ -269,12 +259,20 @@ function PlatformShell({ session }: { session: Session }) {
       abort.signal,
     )
       .then(({ targets }) => {
-        if (!abort.signal.aborted)
+        if (!abort.signal.aborted) {
+          if (
+            workspace.environment &&
+            !targets.some((target) => target.name === workspace.environment)
+          )
+            setTargetError(
+              `The selected deployment ${workspace.environment} is unavailable. Choose another deployment or inspect a stack preview.`,
+            );
           setWorkspace((selection) =>
             selection.repository === repository
               ? selectSoleTarget(selection, targets)
               : selection,
           );
+        }
       })
       .catch((failure: unknown) => {
         if (!abort.signal.aborted)
@@ -283,7 +281,7 @@ function PlatformShell({ session }: { session: Session }) {
           );
       });
     return () => abort.abort();
-  }, [workspace.repository, session.execution_enabled]);
+  }, [workspace.repository, workspace.environment, session.execution_enabled]);
   const intent = useRef(0);
   const mounted = useRef(true);
   const historyPosition = useRef({
@@ -631,7 +629,7 @@ function Dashboard({ session }: { session: Session }) {
   const [environmentsError, setEnvironmentsError] = useState("");
   const [environmentErrorRepository, setEnvironmentErrorRepository] =
     useState("");
-  const [runs, setRuns] = useState<Run[]>([]);
+  const [runs, setRuns] = useState<RunSummary[]>([]);
   const [runPage, setRunPage] = useState(1);
   const [runSize, setRunSize] = useState(20);
   const [runTotal, setRunTotal] = useState(0);
@@ -895,7 +893,7 @@ function Dashboard({ session }: { session: Session }) {
     if (tab !== "runs" || !historyReady) return;
     let active = true;
     const load = () =>
-      request<Page<Run>>(
+      request<Page<RunSummary>>(
         `/runs?repository=${encodeURIComponent(repository)}${environment ? `&environment=${encodeURIComponent(environment)}` : ""}&page=${runPage}&page_size=${runSize}`,
       )
         .then((result) => {

@@ -80,6 +80,7 @@ import { stackRequest, type View } from "./navigation";
 import { newComponentPosition, snapPoint } from "./layout";
 import type {
   Catalog,
+  Components,
   Platform,
   Relationship,
   Review,
@@ -116,6 +117,7 @@ export default function App() {
     registerGuard,
     location,
     navigate: applicationNavigate,
+    applyWorkspace,
     targetError,
   } = useApplication();
   const [baseCatalog, setBaseCatalog] = useState<Catalog>({});
@@ -133,7 +135,8 @@ export default function App() {
     undefined,
     () => createDraftHistory(),
   );
-  const { components, positions, routes, disabled } = draftHistory.present;
+  const { components, positions, routes, disabled, renames } =
+    draftHistory.present;
   const [selected, setSelected] = useState<string | null>(null);
   const [connectionSelection, setConnectionSelection] =
     useState<ConnectionSelection | null>(null);
@@ -162,8 +165,13 @@ export default function App() {
   const [storageError, setStorageError] = useState("");
   const [savedDraft, setSavedDraft] = useState(false);
   const structuralKey = useMemo(
-    () => inspectionBody(snapshot?.snapshot ?? "", { components, disabled }),
-    [snapshot?.snapshot, components, disabled],
+    () =>
+      inspectionBody(snapshot?.snapshot ?? "", {
+        components,
+        disabled,
+        renames,
+      }),
+    [snapshot?.snapshot, components, disabled, renames],
   );
   const environment =
     session.execution_enabled &&
@@ -559,8 +567,9 @@ export default function App() {
 
   const dirty = Boolean(
     snapshot?.document &&
-    (JSON.stringify(components) !==
-      JSON.stringify(snapshot.document.components ?? {}) ||
+    (Boolean(renames?.length) ||
+      JSON.stringify(components) !==
+        JSON.stringify(snapshot.document.components ?? {}) ||
       JSON.stringify(disabled) !==
         JSON.stringify(snapshot.document.disabled_associations ?? []) ||
       JSON.stringify(positions) !==
@@ -721,6 +730,39 @@ export default function App() {
     window.addEventListener("beforeunload", preventLoss);
     return () => window.removeEventListener("beforeunload", preventLoss);
   }, [dirty]);
+
+  async function renameComponent(oldName: string, newName: string) {
+    if (!canEdit) throw new Error("This stack is read-only.");
+    const requestScope = sourceKey;
+    const result = await api<{ components: Components }>("/rename-component", {
+      ...JSON.parse(sourceKey),
+      old_name: oldName,
+      new_name: newName,
+    });
+    if (!editingEnabled.current || confirmationScope.current !== requestScope)
+      throw new Error("The draft changed while renaming. Please retry.");
+    dispatchDraft({
+      type: "change",
+      update: (draft) => ({
+        ...draft,
+        components: result.components,
+        positions: Object.fromEntries(
+          Object.entries(draft.positions).map(([name, position]) => [
+            name === oldName ? newName : name,
+            position,
+          ]),
+        ),
+        routes: draft.routes.map((route) => ({
+          ...route,
+          source: route.source === oldName ? newName : route.source,
+          target: route.target === oldName ? newName : route.target,
+        })),
+        renames: [...(draft.renames ?? []), { old: oldName, new: newName }],
+      }),
+    });
+    setSelected((current) => (current === oldName ? newName : current));
+    setSelectedRelationship(null);
+  }
 
   function addComponent(type: string): string {
     if (!canEdit) return "";
@@ -1111,9 +1153,25 @@ export default function App() {
                     <span> / {environment ?? "Stack preview"}</span>
                   )}
                 </div>
-                {targetError && (
+                {(targetError || (environment && validationError)) && (
                   <p role="alert">
-                    {targetError} Stack preview remains available.
+                    {targetError || validationError} Stack preview remains
+                    available.{" "}
+                    <a href="/settings?section=workspace">Choose deployment</a>
+                    {environment && (
+                      <button
+                        className="text-button"
+                        onClick={() =>
+                          void applyWorkspace({
+                            ...workspace,
+                            environment: "",
+                            preview: true,
+                          })
+                        }
+                      >
+                        Inspect stack preview
+                      </button>
+                    )}
                   </p>
                 )}
                 <div className="stack-title">
@@ -1616,6 +1674,8 @@ export default function App() {
                       readOnly={!canEdit}
                       key={selected}
                       name={selected}
+                      existingNames={Object.keys(components)}
+                      onRename={(name) => renameComponent(selected, name)}
                       component={components[selected]}
                       definition={catalog[components[selected].type]}
                       relationships={relationships}

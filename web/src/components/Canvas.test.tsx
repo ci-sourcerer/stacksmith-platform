@@ -3,20 +3,35 @@ import { act, type ComponentProps, type ReactNode } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { Canvas } from "./Canvas";
+import type { ComposerNode } from "./ComponentNode";
+import type { Relationship } from "../types";
+
+const flow = vi.hoisted(() => ({
+  nodes: [] as ComposerNode[],
+  edges: [] as { id: string }[],
+}));
 
 vi.mock("@xyflow/react", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@xyflow/react")>()),
   ReactFlow: ({
     children,
     "aria-busy": busy,
+    nodes,
+    edges,
   }: {
     children: ReactNode;
     "aria-busy": boolean;
-  }) => (
-    <div data-testid="flow" aria-busy={busy}>
-      {children}
-    </div>
-  ),
+    nodes: ComposerNode[];
+    edges: { id: string }[];
+  }) => {
+    flow.nodes = nodes;
+    flow.edges = edges;
+    return (
+      <div data-testid="flow" aria-busy={busy}>
+        {children}
+      </div>
+    );
+  },
   Panel: ({ children }: { children: ReactNode }) => <div>{children}</div>,
   Background: () => null,
   Controls: () => null,
@@ -118,4 +133,37 @@ it("stops presenting loading when inspection fails", async () => {
   expect(container.querySelector(".is-loading-connections")).toBeNull();
   expect(container.querySelector('[role="status"]')).toBeNull();
   expect(container.textContent).toContain("Managed connections incomplete");
+});
+
+it("reuses node definitions during movement and selection, and removes stale edges", async () => {
+  const components = { app: { type: "service" }, role: { type: "role" } };
+  const catalog = {};
+  const relationships: Relationship[] = [
+    {
+      source: "role",
+      target: "app",
+      output: "arn",
+      property: "role",
+      path: ["role"],
+      kind: "reference",
+      rule: null,
+    },
+  ];
+  const shared = { components, catalog, relationships };
+  await render(shared);
+  const data = flow.nodes.find((node) => node.id === "app")!.data;
+  await render({
+    ...shared,
+    positions: { app: { x: 50, y: 80 } },
+    selected: "app",
+  });
+  expect(flow.nodes.find((node) => node.id === "app")!.data).toBe(data);
+  expect(flow.nodes.find((node) => node.id === "app")!.position).toEqual({
+    x: 50,
+    y: 80,
+  });
+  expect(flow.nodes.find((node) => node.id === "app")!.selected).toBe(true);
+  expect(flow.edges).toHaveLength(1);
+  await render({ ...shared, components: { app: components.app } });
+  expect(flow.edges).toHaveLength(0);
 });

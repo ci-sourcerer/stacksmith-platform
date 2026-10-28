@@ -65,6 +65,8 @@ it("uses the same list controls for component tags", () => {
     <Inspector
       readOnly={false}
       name="example"
+      existingNames={["example"]}
+      onRename={async () => {}}
       component={{
         type: "example",
         tags: ["application", "private"],

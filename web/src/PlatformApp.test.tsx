@@ -24,6 +24,7 @@ vi.mock("./components/Canvas", () => ({
     onConnect,
     onUndo,
     onRedo,
+    onSelect,
     onSelectRelationship,
   }: {
     components: Components;
@@ -36,9 +37,15 @@ vi.mock("./components/Canvas", () => ({
     }) => void;
     onUndo: () => void;
     onRedo: () => void;
+    onSelect: (name: string | null) => void;
     onSelectRelationship: (key: string) => void;
   }) => (
     <>
+      {Object.keys(components).map((name) => (
+        <button key={name} onClick={() => onSelect(name)}>
+          Select component {name}
+        </button>
+      ))}
       <div data-testid="draft-components">
         {Object.keys(components).join(",")}
       </div>
@@ -2975,4 +2982,158 @@ it("keeps launch and history available when the latest run fails", async () => {
     document.querySelector<HTMLButtonElement>(".run-start-button")?.disabled,
   ).toBe(false);
   expect(document.body.textContent).toContain("Run history: dev");
+});
+
+it("explains a remembered missing deployment and inspects preview only when chosen", async () => {
+  vi.useFakeTimers();
+  environmentNames = [];
+  initialComponents = { policy: { type: "service" } };
+  const respond = vi.mocked(api).getMockImplementation()!;
+  vi.mocked(api).mockImplementation(async (...args) => {
+    if (
+      (args[0] === "/review" || args[0] === "/catalog") &&
+      (args[1] as { environment?: string } | undefined)?.environment
+    )
+      throw new ApiError("The selected environment is unavailable.", 404);
+    return respond(...args);
+  });
+  localStorage.setItem(workspaceKey(login), JSON.stringify(workspace));
+  await render("/#/stacks/acme/service/stack.yaml");
+  await inspect();
+  expect(document.body.textContent).toContain(
+    "The selected deployment dev is unavailable",
+  );
+  expect(
+    vi
+      .mocked(api)
+      .mock.calls.filter(([path]) => path === "/review")
+      .every(
+        ([, body]) => (body as { environment: string }).environment === "dev",
+      ),
+  ).toBe(true);
+  await click("button", "Inspect stack preview");
+  await inspect();
+  expect(
+    vi
+      .mocked(api)
+      .mock.calls.filter(([path]) => path === "/review")
+      .at(-1)?.[1],
+  ).toMatchObject({ environment: null, components: initialComponents });
+  expect(document.body.textContent).not.toContain(
+    "The selected deployment dev is unavailable",
+  );
+  expect(
+    document.querySelector('[data-testid="draft-components"]')?.textContent,
+  ).toBe("policy");
+  expect(JSON.parse(localStorage.getItem(workspaceKey(login))!)).toMatchObject({
+    ...workspace,
+    environment: "",
+    preview: true,
+  });
+  expect(document.body.textContent).toContain(
+    "Stack preview: references and managed connections inspected",
+  );
+});
+
+it("renames a component, preserves layout and references, and supports undo and redo", async () => {
+  vi.useFakeTimers();
+  const oldReference = '{{ components["data"]["url"] }}';
+  const newReference = '{{ components["store"]["url"] }}';
+  initialComponents = {
+    data: { type: "service" },
+    app: { type: "service", properties: { url: oldReference } },
+  };
+  const respond = vi.mocked(api).getMockImplementation()!;
+  vi.mocked(api).mockImplementation(async (...args) => {
+    if (args[0].includes("/stack?")) {
+      const snapshot = (await respond(...args)) as Snapshot;
+      return {
+        ...snapshot,
+        document: {
+          ...snapshot.document!,
+          metadata: {
+            stacksmith_composer: {
+              positions: { data: { x: 80, y: 120 } },
+              routes: [
+                {
+                  source: "data",
+                  target: "app",
+                  output: "url",
+                  property: "url",
+                  path: ["url"],
+                  kind: "reference",
+                  rule: null,
+                  points: [{ x: 10, y: 20 }],
+                },
+              ],
+            },
+          },
+        },
+      } as never;
+    }
+    if (args[0] === "/rename-component")
+      return {
+        components: {
+          store: { type: "service" },
+          app: { type: "service", properties: { url: newReference } },
+        },
+      } as never;
+    return respond(...args);
+  });
+  localStorage.setItem(workspaceKey(login), JSON.stringify(workspace));
+  await render("/#/stacks/acme/service/stack.yaml");
+  await inspect();
+  await click("button", "Select component data");
+  await click('button[aria-label="Rename data"]');
+  const input = document.querySelector<HTMLInputElement>("#component-rename")!;
+  await act(async () => {
+    Object.getOwnPropertyDescriptor(
+      HTMLInputElement.prototype,
+      "value",
+    )!.set!.call(input, "store");
+    input.dispatchEvent(new Event("input", { bubbles: true }));
+  });
+  await click('button[type="submit"]', "Rename");
+  expect(
+    document.querySelector('[data-testid="draft-components"]')?.textContent,
+  ).toBe("store,app");
+  expect(
+    document.querySelector('[data-testid="draft-properties"]')?.textContent,
+  ).toContain("store");
+  expect(document.body.textContent).toContain("Component details");
+  await inspect();
+  expect(
+    vi
+      .mocked(api)
+      .mock.calls.filter(([path]) => path === "/source")
+      .at(-1)?.[1],
+  ).toMatchObject({
+    components: {
+      store: { type: "service" },
+      app: { properties: { url: newReference } },
+    },
+    renames: [{ old: "data", new: "store" }],
+  });
+  await click("button", "Test undo");
+  expect(
+    document.querySelector('[data-testid="draft-properties"]')?.textContent,
+  ).toContain("data");
+  await click("button", "Test redo");
+  expect(
+    document.querySelector('[data-testid="draft-components"]')?.textContent,
+  ).toBe("store,app");
+  await act(async () => vi.advanceTimersByTime(300));
+  const saved = JSON.parse(
+    localStorage.getItem(
+      recoveryKey(
+        {
+          repository: "acme/service",
+          path: "stack.yaml",
+          branch: "main",
+        } as Snapshot,
+        login,
+      ),
+    )!,
+  );
+  expect(saved.draft.renames).toEqual([{ old: "data", new: "store" }]);
 });

@@ -10,7 +10,6 @@ from time import perf_counter
 from typing import Annotated, Any, Literal
 from urllib.parse import urlencode, urlparse
 
-import httpx
 from fastapi import APIRouter, Depends, FastAPI, Request
 from fastapi.responses import JSONResponse, RedirectResponse
 from itsdangerous import BadSignature, SignatureExpired, URLSafeTimedSerializer
@@ -21,12 +20,14 @@ from starlette.middleware.trustedhost import TrustedHostMiddleware
 from .access import access_for, require_access
 from .adapter import StacksmithAdapter
 from .certificates import CA_BUNDLE_MOUNT_PATH, configure_ca_bundle
+from .component_rename import rename_components, root_rename_edits
 from .configuration import configuration_policy, effective_config
 from .database import environments, row
 from .database import repositories as registered_repositories
 from .documents import _source_edits, load_document, source_diff
 from .errors import ComposerError
 from .github import GitHubClient
+from .github_transport import GitHubTransport
 from .graph import extract_graph, inspect_graph, validate_root_references
 from .platform import platform_summary
 from .repositories import synchronize, synchronize_user
@@ -71,6 +72,13 @@ class InspectionContextInput(BaseModel):
     )
 
 
+class ComponentRename(BaseModel):
+    """One ordered change to a component identifier."""
+
+    old: str = Field(min_length=1, max_length=200)
+    new: str = Field(pattern=r"^[A-Za-z0-9_-]{1,64}$")
+
+
 class Draft(InspectionContextInput):
     """A proposed edit relative to a signed source snapshot."""
 
@@ -78,6 +86,14 @@ class Draft(InspectionContextInput):
     disabled_associations: list[str] = Field(default_factory=list, max_length=200)
     positions: dict[str, DiagramPosition] = Field(default_factory=dict, max_length=200)
     routes: list[DiagramRoute] = Field(default_factory=list, max_length=500)
+    renames: list[ComponentRename] = Field(default_factory=list, max_length=100)
+
+
+class RenameDraft(Draft):
+    """A draft and the component identifier to change."""
+
+    old_name: str = Field(min_length=1, max_length=200)
+    new_name: str = Field(pattern=r"^[A-Za-z0-9_-]{1,64}$")
 
 
 class ResolutionDraft(Draft):
@@ -131,7 +147,7 @@ def _github(request: Request) -> GitHubClient:
         raise ComposerError(
             "Configure a GitHub App to use repository and PR features.", 503
         )
-    return GitHubClient(session[1])
+    return GitHubClient(session[1], request.app.state.github_transport)
 
 
 def _signer(request: Request) -> URLSafeTimedSerializer:
@@ -286,9 +302,9 @@ def _managed_layers(request, repository=None):
             )
         if not _github_token(request):
             raise ComposerError("Sign in to read managed configuration.", 401)
-        content, revision = GitHubClient(_github_token(request)).repository_file(
-            match[1], match[2].removesuffix(".git"), match[3], match[4]
-        )
+        content, revision = GitHubClient(
+            _github_token(request), request.app.state.github_transport
+        ).repository_file(match[1], match[2].removesuffix(".git"), match[3], match[4])
         layers.append((reference, content, revision))
     return layers
 
@@ -388,6 +404,10 @@ def _draft_edits(request, draft):
             )
             for route in draft.routes
         ],
+    ) + (
+        root_rename_edits(load_document(snapshot["source"]), draft.renames)
+        if draft.renames
+        else []
     )
 
 
@@ -402,7 +422,8 @@ def _draft_modified(snapshot, draft):
     document = load_document(snapshot["source"])
     diagram = (document.get("metadata") or {}).get("stacksmith_composer") or {}
     return (
-        draft.components != document.get("components", {})
+        bool(draft.renames)
+        or draft.components != document.get("components", {})
         or draft.disabled_associations != document.get("disabled_associations", [])
         or {name: position.model_dump() for name, position in draft.positions.items()}
         != diagram.get("positions", {})
@@ -585,6 +606,36 @@ def sample(request: Request) -> dict[str, Any]:
         branch="local example",
         head=None,
     )
+
+
+@composer_router.post("/rename-component")
+def rename_component(request: Request, draft: RenameDraft) -> dict[str, Any]:
+    """Rename a component and update static authored references.
+
+    Args:
+        request: Authenticated request carrying the signed source snapshot.
+        draft: Current draft and the requested identifier change.
+
+    Returns:
+        Component definitions with references updated.
+
+    Raises:
+        ComposerError: The name, access, or an expression prevents a safe rename.
+    """
+    snapshot = _snapshot(request, draft.snapshot)
+    if snapshot.get("repository"):
+        _authoring_write_access(request, snapshot["repository"])
+    if len(draft.renames) >= 100:
+        raise ComposerError("This draft has reached the component rename limit.")
+    root_rename_edits(
+        load_document(snapshot["source"]),
+        [*draft.renames, ComponentRename(old=draft.old_name, new=draft.new_name)],
+    )
+    return {
+        "components": rename_components(
+            draft.components, draft.old_name, draft.new_name
+        )
+    }
 
 
 @composer_router.post("/review")
@@ -866,9 +917,12 @@ def github_login(request: Request) -> RedirectResponse:
     return response
 
 
-def _exchange_token(settings: Settings, code: str) -> dict[str, Any]:
+def _exchange_token(
+    settings: Settings, code: str, transport: GitHubTransport
+) -> dict[str, Any]:
     try:
-        response = httpx.post(
+        response = transport.request(
+            "POST",
             "https://github.com/login/oauth/access_token",
             headers={"Accept": "application/json"},
             data={
@@ -877,11 +931,11 @@ def _exchange_token(settings: Settings, code: str) -> dict[str, Any]:
                 "code": code,
                 "redirect_uri": settings.public_url + "/api/auth/callback",
             },
-            timeout=20,
         )
-        response.raise_for_status()
+        if not 200 <= response.status_code < 300:
+            raise ComposerError("GitHub rejected the authorization exchange.", 502)
         token = response.json()
-    except (httpx.HTTPError, ValueError) as exc:
+    except (ComposerError, ValueError) as exc:
         raise ComposerError(
             "GitHub authorization failed. Please sign in again.", 502
         ) from exc
@@ -944,7 +998,7 @@ def github_callback(
             "GitHub authorization is incomplete. Please start sign-in again.", 401
         )
     settings = request.app.state.settings
-    token = _exchange_token(settings, code)
+    token = _exchange_token(settings, code, request.app.state.github_transport)
     request.app.state.sessions.delete(request.cookies.get("platform_session", ""))
     response = RedirectResponse(
         settings.public_url + "/settings?section=github&auth_return=1"
@@ -952,7 +1006,9 @@ def github_callback(
     response.set_cookie(
         "platform_session",
         request.app.state.sessions.create(
-            GitHubClient(token["access_token"]).user()["login"],
+            GitHubClient(
+                token["access_token"], request.app.state.github_transport
+            ).user()["login"],
             token["access_token"],
             token.get("expires_in", 28800),
         ),
@@ -1047,20 +1103,23 @@ router.include_router(auth_router)
 
 @asynccontextmanager
 async def _lifespan(app):
-    if app.state.settings.execution_enabled:
-        try:
-            await to_thread(
-                synchronize,
-                app.state.database,
-                await to_thread(app.state.provider.catalog),
-                complete=True,
-            )
-        except ComposerError, httpx.HTTPError:
-            # Keep the UI available so an administrator can retry reconciliation.
-            logging.getLogger(__name__).exception(
-                "Initial GitHub discovery failed; refresh repositories to retry"
-            )
-    yield
+    try:
+        if app.state.settings.execution_enabled:
+            try:
+                await to_thread(
+                    synchronize,
+                    app.state.database,
+                    await to_thread(app.state.provider.catalog),
+                    complete=True,
+                )
+            except ComposerError:
+                # Keep the UI available so an administrator can retry reconciliation.
+                logging.getLogger(__name__).exception(
+                    "Initial GitHub discovery failed; refresh repositories to retry"
+                )
+        yield
+    finally:
+        await to_thread(app.state.github_transport.close)
 
 
 def create_app(settings: Settings | None = None) -> FastAPI:
@@ -1100,7 +1159,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         else None
     )
     app.state.sessions = SessionStore(app.state.database)
-    app.state.provider = GitHubProvider(app.state.settings)
+    app.state.github_transport = GitHubTransport()
+    app.state.provider = GitHubProvider(app.state.settings, app.state.github_transport)
     app.state.secret_catalog = SecretCatalog(app.state.settings)
     app.state.execution_credential_catalog = ExecutionCredentialCatalog(settings)
     if app.state.settings.execution_enabled:

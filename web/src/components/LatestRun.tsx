@@ -1,15 +1,7 @@
 import { useEffect, useState } from "react";
 import { api } from "../api";
 
-type RecentRun = {
-  id: string;
-  environment: string;
-  status: string;
-  action: string;
-  revision: string;
-  created: number;
-  actor: string;
-};
+import type { RunSummary } from "../types";
 
 export function LatestRun({
   repository,
@@ -26,7 +18,7 @@ export function LatestRun({
   actionLabel: (action: string) => string;
   runUrl: (id: string) => string;
 }) {
-  const [run, setRun] = useState<RecentRun | null>(null);
+  const [run, setRun] = useState<RunSummary | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [retry, setRetry] = useState(0);
@@ -36,7 +28,7 @@ export function LatestRun({
     let active = true;
     const load = async () => {
       try {
-        const result = await api<{ items: RecentRun[] }>(
+        const result = await api<{ items: RunSummary[] }>(
           `/v1/runs?repository=${encodeURIComponent(repository)}${environment ? `&environment=${encodeURIComponent(environment)}` : ""}&page=1&page_size=1`,
         );
         if (active) {

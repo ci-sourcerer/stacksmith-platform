@@ -23,6 +23,7 @@ import {
   routeLabelPosition,
 } from "../routing";
 import { relationshipKey } from "../model";
+import { diagramNodeData, diagramRoutes } from "../diagram";
 import { GRID_SIZE, initialPosition } from "../layout";
 import type {
   Catalog,
@@ -36,46 +37,6 @@ import "@xyflow/react/dist/style.css";
 const nodeTypes = { component: ComponentNode };
 const edgeTypes = { route: RoutedEdge };
 
-function diagramDefinition(name: string, type: string, props: Props) {
-  const definition = props.catalog[type] ?? {
-    display_name: type,
-    module_source: "",
-    module_version: "",
-    inputs: [],
-    outputs: [],
-  };
-  return {
-    ...definition,
-    inputs: [
-      ...definition.inputs,
-      ...[
-        ...new Set(
-          props.relationships
-            .filter((edge) => edge.target === name)
-            .map((edge) => edge.property),
-        ),
-      ]
-        .filter(
-          (port) => !definition.inputs.some((input) => input.name === port),
-        )
-        .map((port) => ({ name: port })),
-    ],
-    outputs: [
-      ...(definition.outputs ?? []),
-      ...[
-        ...new Set(
-          props.relationships
-            .filter((edge) => edge.source === name)
-            .map((edge) => edge.output),
-        ),
-      ]
-        .filter(
-          (port) => !definition.outputs?.some((output) => output.name === port),
-        )
-        .map((port) => ({ name: port })),
-    ],
-  };
-}
 interface Props {
   readOnly: boolean;
   positions: Record<string, { x: number; y: number }>;
@@ -116,31 +77,26 @@ interface Props {
 
 function Diagram(props: Props) {
   const { positions } = props;
+  const nodeData = useMemo(
+    () => diagramNodeData(props.components, props.catalog, props.relationships),
+    [props.components, props.catalog, props.relationships],
+  );
+  const routes = useMemo(() => diagramRoutes(props.routes), [props.routes]);
   const [nodes, setNodes] = useState<ComposerNode[]>([]);
   const [hiddenLabels, setHiddenLabels] = useState<Set<string>>(new Set());
   const dragging = useRef(new Set<string>());
   const { screenToFlowPosition, getInternalNode } = useReactFlow();
   useEffect(() => {
     setNodes(
-      Object.entries(props.components).map(([name, component], index) => ({
+      Array.from(nodeData).map(([name, data], index) => ({
         id: name,
         type: "component",
         position: positions[name] ?? initialPosition(index),
         selected: props.selected === name,
-        data: {
-          name,
-          type: component.type,
-          definition: diagramDefinition(name, component.type, props),
-        },
+        data,
       })),
     );
-  }, [
-    props.components,
-    props.catalog,
-    props.selected,
-    positions,
-    props.relationships,
-  ]);
+  }, [nodeData, props.selected, positions]);
 
   const edges = useMemo<RoutedEdgeDefinition[]>(
     () =>
@@ -186,17 +142,11 @@ function Diagram(props: Props) {
             readOnly: props.readOnly,
             relationship,
             labelHidden: hiddenLabels.has(relationshipKey(relationship)),
-            labelPosition: props.routes.find(
-              (route) =>
-                relationshipKey(route) === relationshipKey(relationship),
-            )?.label_position,
+            labelPosition: routes.get(relationshipKey(relationship))
+              ?.label_position,
             onLabelChange: (point: DiagramPoint, record: boolean) =>
               props.onLabelPositionChange(relationship, point, record),
-            points:
-              props.routes.find(
-                (route) =>
-                  relationshipKey(route) === relationshipKey(relationship),
-              )?.points ?? [],
+            points: routes.get(relationshipKey(relationship))?.points ?? [],
             onChange: (points: DiagramPoint[], record: boolean) =>
               props.onRouteChange(relationship, points, record),
           },
@@ -207,7 +157,8 @@ function Diagram(props: Props) {
       props.relationships,
       props.associationsStale,
       props.readOnly,
-      props.routes,
+      routes,
+      props.components,
       props.selectedRelationship,
       props.onRouteChange,
       props.onLabelPositionChange,

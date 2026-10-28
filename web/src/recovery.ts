@@ -66,6 +66,16 @@ function isDraft(value: unknown): value is Draft {
     isStrings(value.disabled) &&
     isObject(value.positions) &&
     Object.values(value.positions).every(isPoint) &&
+    (value.renames === undefined ||
+      (Array.isArray(value.renames) &&
+        value.renames.length <= 100 &&
+        value.renames.every(
+          (rename) =>
+            isObject(rename) &&
+            typeof rename.old === "string" &&
+            typeof rename.new === "string" &&
+            /^[A-Za-z0-9_-]{1,64}$/.test(rename.new),
+        ))) &&
     Array.isArray(value.routes) &&
     value.routes.every(
       (route) =>

@@ -32,6 +32,8 @@ Composer currently builds its catalog from explicit module mappings. A type that
 
 ## Connect components
 
+Select a component and use the pencil beside its name to rename its stack identifier. Composer updates static component references, root outputs and operations, and diagram positions and routes. Renaming is an undoable draft change and can cause infrastructure replacement when applied. Expressions with dynamic component lookups must be edited in source before renaming.
+
 Connect a named output on one component to a property on another. Composer records the reference in the stack source and displays it as a relationship on the diagram. Managed associations are shown separately so you can distinguish platform-provided relationships from authored references. Stack-level `disabled_associations` can be edited to opt out of a managed association.
 
 Select a line to open **Connection details** in the sidebar. Managed connections show their platform rule and an **Affected connections** preview. **Disconnect from component** opts the receiving component out of that rule immediately, including any connections where it acts as a producer under the same rule. Other rules and authored references remain enabled. The sidebar stays open with **Undo disconnect**, which restores that opt-out without discarding later edits. Normal undo/redo also remains available. Authored lines instead offer **Remove reference**.

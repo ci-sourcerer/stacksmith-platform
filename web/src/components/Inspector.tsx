@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { Info, Trash2, X } from "lucide-react";
+import { Info, Pencil, Trash2, X } from "lucide-react";
 import type {
   ComponentDefinition,
   ComponentType,
@@ -12,6 +12,8 @@ import { StringListEditor, stringListItems } from "./ListControls";
 interface Props {
   readOnly: boolean;
   name: string;
+  existingNames: string[];
+  onRename: (name: string) => Promise<void>;
   component: ComponentDefinition;
   definition?: ComponentType;
   relationships: Relationship[];
@@ -21,6 +23,10 @@ interface Props {
 }
 
 export function Inspector(props: Props) {
+  const [renaming, setRenaming] = useState(false);
+  const [name, setName] = useState(props.name);
+  const [renameError, setRenameError] = useState("");
+  const [renameBusy, setRenameBusy] = useState(false);
   const [tags, setTags] = useState(() =>
     stringListItems(props.component.tags ?? []),
   );
@@ -51,7 +57,90 @@ export function Inspector(props: Props) {
         <span className="type-icon large">
           <TypeIcon type={props.component.type} size={24} />
         </span>
-        <h2>{props.name}</h2>
+        <div className="component-name-heading">
+          <h2>{props.name}</h2>
+          {!props.readOnly && !renaming && (
+            <button
+              className="icon-button"
+              aria-label={`Rename ${props.name}`}
+              title="Rename component"
+              onClick={() => setRenaming(true)}
+            >
+              <Pencil size={15} />
+            </button>
+          )}
+        </div>
+        {renaming && (
+          <form
+            className="component-rename"
+            onSubmit={async (event) => {
+              event.preventDefault();
+              if (!/^[A-Za-z0-9_-]{1,64}$/.test(name)) {
+                setRenameError(
+                  "Use 1 to 64 letters, numbers, hyphens, or underscores.",
+                );
+                return;
+              }
+              if (props.existingNames.includes(name)) {
+                setRenameError("A component with this name already exists.");
+                return;
+              }
+              setRenameBusy(true);
+              setRenameError("");
+              try {
+                await props.onRename(name);
+                setRenaming(false);
+              } catch (error) {
+                setRenameError(
+                  error instanceof Error
+                    ? error.message
+                    : "Could not rename the component.",
+                );
+              } finally {
+                setRenameBusy(false);
+              }
+            }}
+          >
+            <label htmlFor="component-rename">Component name</label>
+            <input
+              id="component-rename"
+              autoFocus
+              value={name}
+              disabled={renameBusy}
+              maxLength={64}
+              onChange={(event) => {
+                setName(event.target.value);
+                setRenameError("");
+              }}
+            />
+            <p className="muted">
+              Renaming changes the stack identifier and may replace
+              infrastructure when applied.
+            </p>
+            {renameError && <p role="alert">{renameError}</p>}
+            <div className="component-rename-actions">
+              <button
+                className="button small primary"
+                disabled={renameBusy || name === props.name}
+                type="submit"
+              >
+                {renameBusy ? "Renaming…" : "Rename"}
+              </button>
+              <button
+                className="button small"
+                type="button"
+                disabled={renameBusy}
+                onClick={() => {
+                  setName(props.name);
+                  setRenameError("");
+                  setRenaming(false);
+                }}
+              >
+                Cancel
+              </button>
+            </div>
+          </form>
+        )}
         <p className="muted">
           {props.definition?.display_name ?? props.component.type}
         </p>

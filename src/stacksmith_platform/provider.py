@@ -1,10 +1,10 @@
 import time
 from urllib.parse import quote
 
-import httpx
 import jwt
 
 from .errors import ComposerError
+from .github_transport import GitHubTransport
 
 
 class GitHubProvider:
@@ -12,10 +12,12 @@ class GitHubProvider:
 
     Args:
         settings: Administrator-managed GitHub App settings.
+        transport: Process-owned pooled HTTP transport.
     """
 
-    def __init__(self, settings):
+    def __init__(self, settings, transport: GitHubTransport):
         self.settings = settings
+        self.transport = transport
 
     def installation_token(self, installation: int) -> str:
         """Issue a short-lived token for an approved installation.
@@ -29,10 +31,10 @@ class GitHubProvider:
         Raises:
             ComposerError: GitHub rejects the installation or is unavailable.
         """
-        response = httpx.post(
-            f"https://api.github.com/app/installations/{installation}/access_tokens",
+        response = self.transport.request(
+            "POST",
+            f"/app/installations/{installation}/access_tokens",
             headers=self._app_headers(),
-            timeout=20,
         )
         if response.status_code != 201:
             raise ComposerError("GitHub installation access is unavailable.", 503)
@@ -56,11 +58,11 @@ class GitHubProvider:
         return self._app_request("/app")
 
     def _app_request(self, path, params=None):
-        response = httpx.get(
-            f"https://api.github.com{path}",
+        response = self.transport.request(
+            "GET",
+            path,
             headers=self._app_headers(),
             params=params,
-            timeout=20,
         )
         if response.is_error:
             raise ComposerError(
@@ -117,10 +119,10 @@ class GitHubProvider:
         Raises:
             ComposerError: The App is not installed or lookup is unavailable.
         """
-        response = httpx.get(
-            f"https://api.github.com/repos/{repository}/installation",
+        response = self.transport.request(
+            "GET",
+            f"/repos/{repository}/installation",
             headers=self._app_headers(),
-            timeout=20,
         )
         if response.status_code == 404:
             raise ComposerError(
@@ -149,14 +151,13 @@ class GitHubProvider:
         Raises:
             ComposerError: GitHub rejects the request.
         """
-        response = httpx.request(
+        response = self.transport.request(
             method,
-            f"https://api.github.com{path}",
+            path,
             headers={
                 "Authorization": f"Bearer {self.installation_token(installation)}",
                 "Accept": "application/vnd.github+json",
             },
-            timeout=20,
             **kwargs,
         )
         if response.is_error:

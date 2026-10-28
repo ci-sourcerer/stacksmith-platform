@@ -5,6 +5,7 @@ export interface Draft {
   disabled: string[];
   positions: Record<string, { x: number; y: number }>;
   routes: DiagramRoute[];
+  renames?: { old: string; new: string }[];
 }
 
 export interface DraftHistory {
@@ -15,12 +16,13 @@ export interface DraftHistory {
 
 export function inspectionBody(
   snapshot: string,
-  draft: Pick<Draft, "components" | "disabled">,
+  draft: Pick<Draft, "components" | "disabled" | "renames">,
 ): string {
   return JSON.stringify({
     snapshot,
     components: draft.components,
     disabled_associations: draft.disabled,
+    ...(draft.renames?.length ? { renames: draft.renames } : {}),
   });
 }
 
@@ -44,6 +46,7 @@ export function createDraftHistory(draft?: Partial<Draft>): DraftHistory {
       disabled: draft?.disabled ?? [],
       positions: draft?.positions ?? {},
       routes: draft?.routes ?? [],
+      ...(draft?.renames?.length ? { renames: draft.renames } : {}),
     },
     future: [],
   };

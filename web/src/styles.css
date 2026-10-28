@@ -1071,6 +1071,44 @@ input[type="checkbox"] {
   letter-spacing: -0.5px;
   margin-top: 13px;
 }
+.component-name-heading {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  min-width: 0;
+}
+.component-name-heading h2 {
+  overflow-wrap: anywhere;
+}
+.component-rename {
+  display: grid;
+  gap: 8px;
+  margin-top: 12px;
+}
+.component-rename label {
+  font-size: 11px;
+  font-weight: 600;
+}
+.component-rename input {
+  min-width: 0;
+  width: 100%;
+  padding: 8px 10px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  color: var(--foreground);
+  background: var(--paper);
+}
+.component-rename p {
+  font-size: 11px;
+  line-height: 1.5;
+}
+.component-rename [role="alert"] {
+  color: #b45138;
+}
+.component-rename-actions {
+  display: flex;
+  gap: 8px;
+}
 .inspector-body > .muted {
   font-size: 11px;
   margin: 5px 0 20px;
@@ -1826,6 +1864,7 @@ input[type="checkbox"] {
   background: #eff3f7;
 }
 .review-aside {
+  min-width: 0;
   padding-top: 26px;
 }
 .review-aside h3 {
@@ -1863,11 +1902,99 @@ input[type="checkbox"] {
   line-height: 1.8;
   font-size: 12px;
 }
+.inspection-summary {
+  min-width: 0;
+  margin: 8px 0;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--paper);
+  overflow-wrap: anywhere;
+}
+.inspection-summary > summary {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  padding: 12px;
+  color: var(--foreground);
+  cursor: pointer;
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 1.5;
+  list-style: none;
+}
+.inspection-summary > summary::-webkit-details-marker {
+  display: none;
+}
+.inspection-summary > summary:hover {
+  background: var(--accent);
+  border-radius: 7px;
+}
+.inspection-summary > summary > svg:first-child {
+  flex: none;
+  color: var(--green);
+}
+.inspection-summary-mode {
+  color: var(--muted);
+  font-weight: 500;
+}
+.inspection-summary-chevron {
+  flex: none;
+  margin-left: auto;
+  color: var(--muted);
+  transition: transform 0.15s;
+}
+.inspection-summary[open] .inspection-summary-chevron {
+  transform: rotate(180deg);
+}
+.inspection-summary-content {
+  border-top: 1px solid var(--line);
+  padding: 12px;
+}
+.inspection-summary-description {
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1.6;
+}
+.inspection-summary dl {
+  display: grid;
+  gap: 12px;
+  margin: 16px 0 0;
+}
+.inspection-summary dl > div {
+  min-width: 0;
+}
+.inspection-summary dt {
+  color: var(--muted);
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+}
+.inspection-summary dd {
+  margin: 4px 0 0;
+  color: var(--foreground);
+  font-size: 11px;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+.inspection-summary dd code {
+  font-size: 10px;
+}
+
 .inspection-details {
+  min-width: 0;
   padding: 12px;
   border: 1px solid var(--line);
   border-radius: 8px;
   margin: 8px 0;
+  overflow-wrap: anywhere;
+}
+
+.inspection-details dd {
+  margin: 4px 0 12px;
+}
+
+.inspection-details dd:last-child {
+  margin-bottom: 0;
 }
 
 .inspection-details pre {

@@ -1,10 +1,12 @@
 import argparse
 import logging
 import time
+from contextlib import closing
 from uuid import uuid4
 
 from .database import Database, row, runs, scheduler_health
 from .factories import artifact_storage, execution_driver
+from .github_transport import GitHubTransport
 from .provider import GitHubProvider
 from .scheduling import ACTIONABLE, KubernetesDispatcher
 from .settings import Settings
@@ -78,7 +80,7 @@ def _observe_supervisor(reconciler, run_id, generation, release):
         )
 
 
-def _reconciler(settings):
+def _reconciler(settings, transport):
     if not settings.execution_enabled or settings.supervision_mode != "kubernetes-jobs":
         raise ValueError(
             "Finite supervisors require enabled Kubernetes Job supervision"
@@ -88,7 +90,7 @@ def _reconciler(settings):
         Database(settings.database_url, settings.secret_key),
         execution_driver(settings),
         artifact_storage(settings),
-        GitHubProvider(settings),
+        GitHubProvider(settings, transport),
     )
     reconciler.identifier = f"supervisor-{uuid4().hex}"
     return reconciler
@@ -108,7 +110,8 @@ def supervise_main() -> None:
     parser.add_argument("--generation", type=int, required=True)
     args = parser.parse_args()
     logging.basicConfig(level=logging.INFO)
-    supervise(_reconciler(Settings()), args.run_id, args.generation)
+    with closing(GitHubTransport()) as transport:
+        supervise(_reconciler(Settings(), transport), args.run_id, args.generation)
 
 
 def maintain(reconciler: RunReconciler, dispatcher: KubernetesDispatcher) -> int:
@@ -154,5 +157,6 @@ def maintain_main() -> None:
     """
     logging.basicConfig(level=logging.INFO)
     settings = Settings()
-    reconciler = _reconciler(settings)
-    maintain(reconciler, KubernetesDispatcher(settings, reconciler.database))
+    with closing(GitHubTransport()) as transport:
+        reconciler = _reconciler(settings, transport)
+        maintain(reconciler, KubernetesDispatcher(settings, reconciler.database))

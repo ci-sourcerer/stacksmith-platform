@@ -177,3 +177,17 @@ export interface Session {
   login: string | null;
   execution_enabled?: boolean;
 }
+
+export interface RunSummary {
+  id: string;
+  repository: string;
+  environment: string;
+  revision: string;
+  action: string;
+  actor: string;
+  status: string;
+  phase: number;
+  created: number;
+  updated: number;
+  expires: number | null;
+}

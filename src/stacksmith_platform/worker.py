@@ -7,6 +7,7 @@ import secrets as random_secrets
 import signal
 import socket
 import time
+from contextlib import closing
 from threading import Event
 from uuid import uuid4
 
@@ -37,6 +38,7 @@ from .database import (
 from .errors import ComposerError
 from .execution_credentials import ExecutionCredentialCatalog
 from .factories import artifact_storage, execution_driver
+from .github_transport import GitHubTransport
 from .inspection_results import _diagnostic_text, _inspection_failure
 from .integrations import (
     ArtifactNotFoundError,
@@ -673,12 +675,15 @@ class RunReconciler:
                 )
             return
         state = self.driver.inspect(execution["name"])
-        with self.database.transaction() as connection:
-            connection.execute(
-                runs.update()
-                .where(and_(runs.c.id == run["id"], runs.c.worker == self.identifier))
-                .values(execution={**execution, "observed_state": state})
-            )
+        if execution.get("observed_state") != state:
+            with self.database.transaction() as connection:
+                connection.execute(
+                    runs.update()
+                    .where(
+                        and_(runs.c.id == run["id"], runs.c.worker == self.identifier)
+                    )
+                    .values(execution={**execution, "observed_state": state})
+                )
         phase = run["spec"]["phases"][run["phase"]]
         with self.database.transaction() as connection:
             claimed = row(connection, phase_claims, f"{run['id']}:{run['phase']}")
@@ -718,15 +723,24 @@ class RunReconciler:
             phase: self._redact(execution, self.driver.logs(execution["name"])),
         }
         logs = "\n".join(f"[{name}]\n{text}" for name, text in phase_logs.items())
-        with self.database.transaction() as connection:
-            connection.execute(
-                runs.update()
-                .where(and_(runs.c.id == run["id"], runs.c.worker == self.identifier))
-                .values(
-                    result={**run["result"], "phase_logs": phase_logs, "logs": logs},
-                    updated=time.time(),
+        if phase_logs != run["result"].get("phase_logs") or logs != run["result"].get(
+            "logs"
+        ):
+            with self.database.transaction() as connection:
+                connection.execute(
+                    runs.update()
+                    .where(
+                        and_(runs.c.id == run["id"], runs.c.worker == self.identifier)
+                    )
+                    .values(
+                        result={
+                            **run["result"],
+                            "phase_logs": phase_logs,
+                            "logs": logs,
+                        },
+                        updated=time.time(),
+                    )
                 )
-            )
         if state == "running":
             return
         self._collect(run, execution, state, logs)
@@ -1346,14 +1360,15 @@ def main() -> None:
     _STOP.clear()
     signal.signal(signal.SIGTERM, _request_shutdown)
     signal.signal(signal.SIGINT, _request_shutdown)
-    worker = Worker(
-        settings,
-        Database(settings.database_url, settings.secret_key),
-        execution_driver(settings),
-        artifact_storage(settings),
-        GitHubProvider(settings),
-    )
-    _serve(worker, _STOP)
+    with closing(GitHubTransport()) as transport:
+        worker = Worker(
+            settings,
+            Database(settings.database_url, settings.secret_key),
+            execution_driver(settings),
+            artifact_storage(settings),
+            GitHubProvider(settings, transport),
+        )
+        _serve(worker, _STOP)
 
 
 if __name__ == "__main__":

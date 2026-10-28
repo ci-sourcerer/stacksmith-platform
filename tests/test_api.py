@@ -457,3 +457,45 @@ tools:
         }
     }
     assert "secret-tool-value" not in response.text
+
+
+@pytest.mark.parametrize(
+    "status,body",
+    [(502, b"unavailable"), (200, b"invalid"), (302, b'{"access_token":"unexpected"}')],
+)
+def test_oauth_exchange_maps_http_and_json_failures(client, status, body):
+    from stacksmith_platform.app import _exchange_token
+    from stacksmith_platform.errors import ComposerError
+    from stacksmith_platform.github_transport import GitHubResponse
+
+    with (
+        patch.object(
+            client.app.state.github_transport,
+            "request",
+            return_value=GitHubResponse(status, body),
+        ),
+        pytest.raises(ComposerError, match="authorization failed") as caught,
+    ):
+        _exchange_token(
+            client.app.state.settings, "code", client.app.state.github_transport
+        )
+    assert caught.value.status == 502
+
+
+def test_oauth_exchange_uses_shared_transport(client):
+    from stacksmith_platform.app import _exchange_token
+    from stacksmith_platform.github_transport import GitHubResponse
+
+    with patch.object(
+        client.app.state.github_transport,
+        "request",
+        return_value=GitHubResponse(200, b'{"access_token":"user-token"}'),
+    ) as request:
+        assert _exchange_token(
+            client.app.state.settings, "code", client.app.state.github_transport
+        ) == {"access_token": "user-token"}
+    assert request.call_args.args == (
+        "POST",
+        "https://github.com/login/oauth/access_token",
+    )
+    assert request.call_args.kwargs["data"]["code"] == "code"

@@ -3,12 +3,14 @@ import hmac
 import json
 import os
 import time
+from functools import partial
 from types import SimpleNamespace
 
 import pytest
 from botocore.exceptions import ClientError
 from cryptography.fernet import Fernet
 from fastapi.testclient import TestClient
+from sqlalchemy import event
 
 from stacksmith_platform.app import create_app
 from stacksmith_platform.database import (
@@ -111,7 +113,7 @@ class Provider:
 class UserGitHub:
     """User access checks kept separate from installation access."""
 
-    def __init__(self, token):
+    def __init__(self, token, transport):
         self.token = token
 
     def _repository(self, owner, repo):
@@ -1937,3 +1939,81 @@ def test_personal_catalog_refresh_does_not_request_properties(platform, monkeypa
         platform.client.post("/api/v1/repositories/refresh", json={}).status_code == 200
     )
     assert requests == ["/repos/personal/stack"]
+
+
+def _record_statement(
+    statements, connection, cursor, statement, parameters, context, many
+):
+    statements.append(statement)
+
+
+@pytest.fixture
+def sql_statements(platform):
+    statements = []
+    listener = partial(_record_statement, statements)
+    event.listen(platform.database.engine, "before_cursor_execute", listener)
+    try:
+        yield statements
+    finally:
+        event.remove(platform.database.engine, "before_cursor_execute", listener)
+
+
+def test_unchanged_worker_output_renews_lease_without_rewriting_json(
+    platform, sql_statements
+):
+    identifier = _create(platform, action="plan").json()["id"]
+    platform.worker.tick()
+    platform.worker.tick()
+    previous = _read(platform, identifier)
+    sql_statements.clear()
+    platform.worker.tick()
+    current = _read(platform, identifier)
+    assert current["lease"] > previous["lease"]
+    assert current["updated"] == previous["updated"]
+    assert current["result"] == previous["result"]
+    assert not any(
+        statement.startswith("UPDATE runs SET")
+        and ("result=" in statement or "execution=" in statement)
+        for statement in sql_statements
+    )
+    platform.driver.executions[current["execution"]["name"]]["logs"] = "new output"
+    platform.worker.tick()
+    changed = _read(platform, identifier)
+    assert changed["updated"] > current["updated"]
+    assert "new output" in changed["result"]["logs"]
+    _complete(platform, identifier)
+    assert _read(platform, identifier)["phase"] == 1
+
+
+def test_history_summary_never_loads_large_run_payloads(platform, sql_statements):
+    identifier = _create(platform, action="plan").json()["id"]
+    with platform.database.transaction() as connection:
+        connection.execute(
+            runs.update()
+            .where(runs.c.id == identifier)
+            .values(
+                result={
+                    "logs": "large log" * 100000,
+                    "reports": {"report": "large" * 100000},
+                }
+            )
+        )
+    sql_statements.clear()
+    response = platform.client.get("/api/v1/runs?repository=acme/service")
+    assert response.status_code == 200
+    assert response.json()["items"][0] == {
+        key: value
+        for key, value in platform.client.get(f"/api/v1/runs/{identifier}")
+        .json()
+        .items()
+        if key not in {"spec", "result"}
+    }
+    assert len(response.content) < 1000
+    history_queries = [
+        statement
+        for statement in sql_statements
+        if "ORDER BY runs.created" in statement
+    ]
+    assert len(history_queries) == 1
+    assert "runs.spec" not in history_queries[0]
+    assert "runs.result" not in history_queries[0]

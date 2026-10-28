@@ -412,7 +412,9 @@ def _repository_access(
 ):
     if not re.fullmatch(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+", repository):
         raise ComposerError("Invalid repository name.", 422)
-    GitHubClient(identity["github"])._repository(*repository.split("/"))
+    GitHubClient(identity["github"], request.app.state.github_transport)._repository(
+        *repository.split("/")
+    )
     if identity["scope"]:
         scope = identity["scope"]
         action, _, workload = permission.partition("_")
@@ -651,7 +653,9 @@ def list_repositories(request: Request):
     identity = _identity(request)
     if identity["scope"] and "view" not in identity["scope"]["permissions"]:
         return []
-    discovered = GitHubClient(identity["github"]).repositories()
+    discovered = GitHubClient(
+        identity["github"], request.app.state.github_transport
+    ).repositories()
     with request.app.state.database.transaction() as connection:
         discovered = filtered(discovered, get_filter(connection))
     synchronize_user(request.app.state.database, discovered)
@@ -1997,9 +2001,21 @@ def list_runs(
                 select(func.count()).select_from(runs).where(scope)
             ).scalar_one(),
             "items": [
-                _public_run(item)
+                dict(item)
                 for item in connection.execute(
-                    runs.select()
+                    select(
+                        runs.c.id,
+                        runs.c.repository,
+                        runs.c.environment,
+                        runs.c.revision,
+                        runs.c.action,
+                        runs.c.actor,
+                        runs.c.status,
+                        runs.c.phase,
+                        runs.c.created,
+                        runs.c.updated,
+                        runs.c.expires,
+                    )
                     .where(scope)
                     .order_by(runs.c.created.desc(), runs.c.id.desc())
                     .offset((page - 1) * page_size)

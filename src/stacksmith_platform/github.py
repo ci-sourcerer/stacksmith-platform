@@ -5,10 +5,9 @@ from collections.abc import Callable
 from typing import Any
 from urllib.parse import quote
 
-import httpx
-
 from .documents import MAX_SOURCE_BYTES
 from .errors import ComposerError
+from .github_transport import GitHubTransport
 
 
 def _segment(value: str) -> str:
@@ -66,30 +65,24 @@ class GitHubClient:
 
     Args:
         token: User-scoped access token, never an installation-wide write token.
-        transport: Optional HTTP transport for deterministic integration tests.
+        transport: Process-owned pooled HTTP transport.
     """
 
-    def __init__(self, token: str, transport: httpx.BaseTransport | None = None):
+    def __init__(self, token: str, transport: GitHubTransport):
         self.token = token
         self.transport = transport
 
     def _request(self, method: str, path: str, **kwargs) -> Any:
-        try:
-            with httpx.Client(
-                base_url="https://api.github.com",
-                headers={
-                    "Authorization": f"Bearer {self.token}",
-                    "Accept": "application/vnd.github+json",
-                    "X-GitHub-Api-Version": "2022-11-28",
-                },
-                timeout=20,
-                transport=self.transport,
-            ) as client:
-                response = client.request(method, path, **kwargs)
-        except httpx.RequestError as exc:
-            raise ComposerError(
-                "GitHub is temporarily unreachable. Please retry.", 502
-            ) from exc
+        response = self.transport.request(
+            method,
+            path,
+            headers={
+                "Authorization": f"Bearer {self.token}",
+                "Accept": "application/vnd.github+json",
+                "X-GitHub-Api-Version": "2022-11-28",
+            },
+            **kwargs,
+        )
         if response.status_code in {401, 403}:
             raise ComposerError(
                 "GitHub access was denied. Sign in again or check app permissions.", 403
