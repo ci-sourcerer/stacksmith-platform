@@ -112,11 +112,14 @@ class GitHubClient:
         """Return the authenticated GitHub user."""
         return self._request("GET", "/user")
 
-    def repositories(self, repository: str | None = None) -> list[dict[str, Any]]:
+    def repositories(
+        self, repository: str | None = None, installation_id: int | None = None
+    ) -> list[dict[str, Any]]:
         """Discover repositories accessible to both the user and app.
 
         Args:
             repository: Optional full repository name to inspect exclusively.
+            installation_id: Server-recorded installation hint for targeted discovery.
 
         Returns:
             Repository summaries, including current push permission.
@@ -124,34 +127,54 @@ class GitHubClient:
         Raises:
             ComposerError: GitHub discovery fails or exceeds its page limit.
         """
+        if repository is not None and installation_id is not None:
+            try:
+                discovered = self._installation_repositories(
+                    {"id": installation_id}, repository
+                )
+            except ComposerError as error:
+                if error.status != 404:
+                    raise
+                discovered = {}
+            if discovered:
+                return self._accessible_repositories(list(discovered.values()))
         repositories = {}
         for installation in self._pages("/user/installations", "installations"):
-            for repo in self._pages(
-                f"/user/installations/{installation['id']}/repositories", "repositories"
-            ):
-                if (
-                    repository is not None
-                    and repo["full_name"].casefold() != repository.casefold()
-                ):
-                    continue
-                repositories[repo["id"]] = {
-                    "github_id": str(repo["id"]),
-                    "installation_id": installation["id"],
-                    "account": repo["full_name"].split("/")[0],
-                    "management_url": installation.get("html_url"),
-                    "name": repo["full_name"],
-                    "description": repo.get("description"),
-                    "default_branch": repo["default_branch"],
-                    "topics": repo.get("topics", []),
-                    "custom_properties": repo.get("custom_properties", {}),
-                    "owner_type": repo.get("owner", {}).get("type")
-                    or installation.get("account", {}).get("type"),
-                    "writable": repo.get("permissions", {}).get("push", False)
-                    and not repo.get("archived", False),
-                }
+            repositories.update(
+                self._installation_repositories(installation, repository)
+            )
         return self._accessible_repositories(
             sorted(repositories.values(), key=lambda item: item["name"])
         )
+
+    def _installation_repositories(self, installation, repository):
+        repositories = {}
+        for repo in self._pages(
+            f"/user/installations/{installation['id']}/repositories", "repositories"
+        ):
+            if (
+                repository is not None
+                and repo["full_name"].casefold() != repository.casefold()
+            ):
+                continue
+            repositories[repo["id"]] = {
+                "github_id": str(repo["id"]),
+                "installation_id": installation["id"],
+                "account": repo["full_name"].split("/")[0],
+                "management_url": installation.get("html_url"),
+                "name": repo["full_name"],
+                "description": repo.get("description"),
+                "default_branch": repo["default_branch"],
+                "topics": repo.get("topics", []),
+                "custom_properties": repo.get("custom_properties", {}),
+                "owner_type": repo.get("owner", {}).get("type")
+                or installation.get("account", {}).get("type"),
+                "writable": repo.get("permissions", {}).get("push", False)
+                and not repo.get("archived", False),
+            }
+            if repository is not None:
+                break
+        return repositories
 
     def _accessible_repositories(self, discovered):
         accessible = []
@@ -164,7 +187,9 @@ class GitHubClient:
                     raise
                 continue
             item["topics"] = metadata.get("topics", item["topics"])
-            if item.pop("owner_type") != "User":
+            if (
+                item.pop("owner_type") or metadata.get("owner", {}).get("type")
+            ) != "User":
                 item["custom_properties"] = repository_properties(
                     self._request, owner, name
                 )

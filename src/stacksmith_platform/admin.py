@@ -28,6 +28,9 @@ def main() -> None:
     if args.grant_roles:
         with engine.begin() as connection:
             connection.exec_driver_sql(
+                "GRANT SELECT, INSERT, UPDATE, DELETE ON inspection_editors, inspection_sandboxes, inspection_cache TO platform_api, platform_worker"
+            )
+            connection.exec_driver_sql(
                 "GRANT USAGE ON SCHEMA public TO platform_api, platform_worker"
             )
             connection.exec_driver_sql(

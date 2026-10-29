@@ -1,9 +1,21 @@
 import { useEffect, useRef, useState } from "react";
-import { api } from "./api";
+import { api, ApiError } from "./api";
 import type { Review } from "./types";
 
-export function useDraftReview(key: string, enabled: boolean, attempt: number) {
-  const [result, setResult] = useState<{ key: string; review: Review }>();
+export function useDraftReview(
+  key: string,
+  enabled: boolean,
+  attempt: number,
+  controller = false,
+  sourceKey?: string,
+) {
+  const [result, setResult] = useState<{
+    key: string;
+    review: Review;
+    sourceKey?: string;
+  }>();
+  const [editorId] = useState(() => crypto.randomUUID());
+  const generation = useRef(0);
   const [failure, setFailure] = useState<{
     key: string;
     attempt: number;
@@ -27,35 +39,53 @@ export function useDraftReview(key: string, enabled: boolean, attempt: number) {
     setFailure(undefined);
     setCompleted(undefined);
     let superseded = false;
-    const lifetimeSignal = lifetime.current.signal;
+    const abort = new AbortController();
+    const lifetimeSignal = controller ? abort.signal : lifetime.current.signal;
+    const requestGeneration = ++generation.current;
     const timer = setTimeout(() => {
-      active.current = active.current.then(async () => {
+      const inspect = async () => {
         if (superseded || lifetimeSignal.aborted) return;
         try {
           const review = await api<Review>(
             "/review",
-            JSON.parse(key),
+            controller
+              ? {
+                  ...JSON.parse(sourceKey ?? key),
+                  ...JSON.parse(key),
+                  editor_id: editorId,
+                  generation: requestGeneration,
+                }
+              : JSON.parse(key),
             lifetimeSignal,
           );
           if (!superseded && !lifetimeSignal.aborted)
-            setResult({ key, review });
+            setResult({ key, review, ...(controller ? { sourceKey } : {}) });
         } catch (error) {
+          if (
+            error instanceof ApiError &&
+            error.diagnostics?.code === "inspection_superseded"
+          )
+            return;
           if (!superseded && !lifetimeSignal.aborted)
             setFailure({ key, attempt, error });
         } finally {
           if (!superseded && !lifetimeSignal.aborted)
             setCompleted({ key, attempt });
         }
-      });
+      };
+      if (controller) void inspect();
+      else active.current = active.current.then(inspect);
     }, 400);
     return () => {
       clearTimeout(timer);
-      // Keep the active request alive so its server job finishes before the next.
+      if (controller) abort.abort();
+      // Legacy deployments finish the active request before sending pending work.
       superseded = true;
     };
-  }, [key, enabled, attempt]);
+  }, [key, enabled, attempt, controller, editorId]);
 
   return {
+    editorId,
     result,
     failure:
       enabled && failure?.key === key && failure.attempt === attempt

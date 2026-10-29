@@ -3,7 +3,8 @@ import json
 import logging
 import re
 import secrets
-from asyncio import to_thread
+from asyncio import get_running_loop, to_thread
+from concurrent.futures import ThreadPoolExecutor
 from contextlib import asynccontextmanager
 from pathlib import Path
 from time import perf_counter
@@ -87,6 +88,8 @@ class Draft(InspectionContextInput):
     positions: dict[str, DiagramPosition] = Field(default_factory=dict, max_length=200)
     routes: list[DiagramRoute] = Field(default_factory=list, max_length=500)
     renames: list[ComponentRename] = Field(default_factory=list, max_length=100)
+    editor_id: str | None = Field(default=None, pattern=r"^[A-Za-z0-9_-]{1,100}$")
+    generation: int | None = Field(default=None, ge=1)
 
 
 class RenameDraft(Draft):
@@ -232,7 +235,7 @@ def _context_metadata(context):
         {
             key: value
             for key, value in context.items()
-            if key not in {"actor", "settings"}
+            if key not in {"actor", "settings"} and not key.startswith("_")
         }
         if context
         else None
@@ -249,6 +252,16 @@ def _check_inspection_context(request, context, adapter):
         raise ComposerError(
             "Platform configuration changed. Reopen the stack before reviewing.", 409
         )
+    if context.get("_input_manifest"):
+        from .inspection_inputs import prepare_inputs
+
+        if (
+            prepare_inputs(request, context)["_input_manifest"]["digest"]
+            != context["_input_manifest"]["digest"]
+        ):
+            raise ComposerError(
+                "Inspection dependencies changed. Review the draft again.", 409
+            )
     if context["environment"]:
         _check_environment_state(request, context, adapter, _principal(request))
 
@@ -310,12 +323,11 @@ def _managed_layers(request, repository=None):
 
 
 def _config_revision(request, repository=None):
+    layers = _managed_layers(request, repository)
+    request.state.inspection_layers = (repository, layers)
     return hashlib.sha256(
         json.dumps(
-            [
-                (str(reference), revision)
-                for reference, _, revision in _managed_layers(request, repository)
-            ]
+            [(str(reference), revision) for reference, _, revision in layers]
         ).encode()
     ).hexdigest()
 
@@ -385,8 +397,8 @@ def _draft_source(request: Request, draft: Draft) -> tuple[dict[str, Any], str]:
     return snapshot, source
 
 
-def _draft_edits(request, draft):
-    snapshot = _snapshot(request, draft.snapshot)
+def _draft_edits(request, draft, check_configuration=True):
+    snapshot = _snapshot(request, draft.snapshot, check_configuration)
     if snapshot.get("repository") and _draft_modified(snapshot, draft):
         _authoring_write_access(request, snapshot["repository"])
     return snapshot, _source_edits(
@@ -449,6 +461,10 @@ def _review(request: Request, draft: Draft) -> tuple[dict[str, Any], dict[str, A
         snapshot["source"], edits, snapshot["path"], _github_token(request)
     )
     timings["inspection"] = perf_counter() - stage_started
+    return _finish_review(request, snapshot, context, adapter, result, started, timings)
+
+
+def _finish_review(request, snapshot, context, adapter, result, started, timings):
     stage_started = perf_counter()
     source = result["source"]
     _check_draft_source(request, snapshot, source)
@@ -491,6 +507,7 @@ def session_info(request: Request) -> dict[str, Any]:
         "mode": "github" if request.app.state.settings.github_enabled else "demo",
         "login": session[0] if session else None,
         "execution_enabled": request.app.state.settings.execution_enabled,
+        "inspection_controller_enabled": request.app.state.settings.inspection_controller_enabled,
     }
 
 
@@ -500,14 +517,44 @@ def health() -> dict[str, str]:
     return {"status": "ok"}
 
 
+@platform_router.get("/inspection-status", dependencies=[Depends(_identity)])
+def inspection_pool_status(request: Request) -> dict[str, Any]:
+    """Read administrator-only inspection capacity and queue gauges.
+
+    Args:
+        request: Authenticated platform administrator request.
+
+    Returns:
+        Aggregate controller and sandbox metrics.
+
+    Raises:
+        ComposerError: The caller cannot administer the platform.
+    """
+    from .control import _administrator
+    from .control import _identity as identity
+    from .inspection_health import status
+
+    _administrator(request, identity(request))
+    return {
+        **status(request.app.state.database, request.app.state.settings),
+        "github_requests": request.app.state.github_transport.request_count,
+        "github_conditional_hits": request.app.state.github_transport.conditional_hits,
+        "github_counter_id": request.app.state.github_transport.counter_id,
+    }
+
+
 @platform_router.get("/catalog", dependencies=[Depends(_identity)])
-def catalog(request: Request) -> dict[str, Any]:
+async def catalog(request: Request) -> dict[str, Any]:
     """Return public component metadata from the separate Stacksmith installation."""
-    return _adapter(request).catalog(_github_token(request))
+    adapter = await to_thread(_adapter, request)
+    token = await to_thread(_github_token, request)
+    if request.app.state.settings.inspection_controller_enabled:
+        return await adapter.acatalog(token)
+    return await to_thread(adapter.catalog, token)
 
 
 @composer_router.post("/catalog")
-def environment_catalog(
+async def environment_catalog(
     request: Request, body: InspectionContextInput
 ) -> dict[str, Any]:
     """Inspect component metadata for a signed stack's inspection context.
@@ -522,13 +569,25 @@ def environment_catalog(
     Raises:
         ComposerError: The snapshot, environment, access, or inspection is invalid.
     """
+    context, adapter, token = await to_thread(_prepare_catalog, request, body)
+    result = (
+        await adapter.acatalog(token)
+        if request.app.state.settings.inspection_controller_enabled
+        else await to_thread(adapter.catalog, token)
+    )
+    await to_thread(_check_inspection_context, request, context, adapter)
+    return {"catalog": result, "context": _context_metadata(context)}
+
+
+def _prepare_catalog(request, body):
     context = _inspection_context(
         request, _snapshot(request, body.snapshot), body.environment
     )
-    adapter = _adapter(request, context["repository"] if context else None, context)
-    result = adapter.catalog(_github_token(request))
-    _check_inspection_context(request, context, adapter)
-    return {"catalog": result, "context": _context_metadata(context)}
+    return (
+        context,
+        _adapter(request, context["repository"] if context else None, context),
+        _github_token(request),
+    )
 
 
 @composer_router.get("/inspection-targets")
@@ -649,13 +708,17 @@ def rename_component(request: Request, draft: RenameDraft) -> dict[str, Any]:
 
 
 @composer_router.post("/review")
-def review(request: Request, draft: Draft) -> dict[str, Any]:
+async def review(request: Request, draft: Draft) -> dict[str, Any]:
     """Inspect a draft and return the exact authored source and diff for review."""
-    return _review(request, draft)[1]
+    if request.app.state.settings.inspection_controller_enabled:
+        from .async_inspection import review as inspect_review
+
+        return (await inspect_review(request, draft))[1]
+    return (await to_thread(_review, request, draft))[1]
 
 
 @composer_router.post("/source")
-def draft_source(request: Request, draft: Draft) -> dict[str, str]:
+async def draft_source(request: Request, draft: Draft) -> dict[str, str]:
     """Render authored changes without running Stacksmith inspection.
 
     Args:
@@ -668,7 +731,12 @@ def draft_source(request: Request, draft: Draft) -> dict[str, str]:
     Raises:
         ComposerError: If the snapshot or authored document is invalid.
     """
-    snapshot, source = _draft_source(request, draft)
+    if request.app.state.settings.inspection_controller_enabled:
+        from .async_inspection import source as inspect_source
+
+        snapshot, source = await inspect_source(request, draft)
+    else:
+        snapshot, source = await to_thread(_draft_source, request, draft)
     return {
         "source": source,
         "diff": source_diff(snapshot["source"], source, snapshot["path"]),
@@ -701,7 +769,7 @@ def authored_graph(request: Request, draft: Draft) -> dict[str, Any]:
 
 
 @composer_router.post("/resolution")
-def resolution(request: Request, draft: ResolutionDraft) -> dict[str, Any]:
+async def resolution(request: Request, draft: ResolutionDraft) -> dict[str, Any]:
     """Explain the current draft with resolved values and templates visible.
 
     Args:
@@ -714,6 +782,14 @@ def resolution(request: Request, draft: ResolutionDraft) -> dict[str, Any]:
     Raises:
         ComposerError: If the snapshot, authored source, or resolution is invalid.
     """
+    if request.app.state.settings.inspection_controller_enabled:
+        from .async_inspection import resolution as inspect_resolution
+
+        return await inspect_resolution(request, draft)
+    return await to_thread(_resolve_request, request, draft)
+
+
+def _resolve_request(request, draft):
     return _resolve_draft(request, draft, _draft_source(request, draft))
 
 
@@ -755,8 +831,22 @@ def repository_discovery(
 
 
 def _repository_discovery(request, client, repository=None):
+    with request.app.state.database.transaction() as connection:
+        registered = (
+            row(connection, registered_repositories, repository)
+            if repository is not None
+            else None
+        )
     discovered = (
-        client.repositories(repository=repository)
+        client.repositories(
+            repository=repository,
+            **(
+                {"installation_id": registered["installation"]}
+                if registered
+                and request.app.state.settings.inspection_controller_enabled
+                else {}
+            ),
+        )
         if repository is not None
         else client.repositories()
     )
@@ -874,11 +964,22 @@ def open_stack(
 
 
 @github_router.post("/pull-requests")
-def pull_request(
+async def pull_request(
     request: Request, draft: Draft, client: Annotated[GitHubClient, Depends(_github)]
 ):
     """Reinspect reviewed changes and open a PR under the user's permissions."""
-    snapshot, inspected = _review(request, draft)
+    if request.app.state.settings.inspection_controller_enabled:
+        from .async_inspection import review as inspect_review
+
+        snapshot, inspected = await inspect_review(
+            request, draft.model_copy(update={"editor_id": None, "generation": None})
+        )
+    else:
+        snapshot, inspected = await to_thread(_review, request, draft)
+    return await to_thread(_publish_reviewed_pr, request, client, snapshot, inspected)
+
+
+def _publish_reviewed_pr(request, client, snapshot, inspected):
     if not snapshot["repository"] or not inspected["diff"]:
         raise ComposerError("There are no repository changes to propose.")
     _authoring_write_access(request, snapshot["repository"])
@@ -1085,6 +1186,13 @@ def _ready(request: Request):
 
     from .database import grants, sessions
 
+    if (
+        request.app.state.settings.inspection_controller_enabled
+        and not request.app.state.inspection_notifications.connected
+    ):
+        return JSONResponse(
+            {"status": "inspection notifications unavailable"}, status_code=503
+        )
     try:
         with request.app.state.database.transaction() as connection:
             connection.execute(sessions.select().limit(1))
@@ -1117,6 +1225,18 @@ router.include_router(auth_router)
 
 @asynccontextmanager
 async def _lifespan(app):
+    from .inspection_notifications import InspectionNotifications
+
+    if app.state.settings.inspection_controller_enabled:
+        get_running_loop().set_default_executor(
+            ThreadPoolExecutor(max_workers=32, thread_name_prefix="inspection-api")
+        )
+    app.state.inspection_notifications = InspectionNotifications(app.state.database)
+    await app.state.inspection_notifications.start()
+    if app.state.settings.inspection_controller_enabled:
+        from .inspection_health import register
+
+        await to_thread(register, app.state.database, app.state.settings)
     try:
         if app.state.settings.execution_enabled:
             try:
@@ -1133,6 +1253,7 @@ async def _lifespan(app):
                 )
         yield
     finally:
+        await app.state.inspection_notifications.close()
         await to_thread(app.state.github_transport.close)
 
 
@@ -1180,6 +1301,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     if app.state.settings.execution_enabled:
         app.state.artifacts = artifact_storage(app.state.settings)
     app.include_router(control_router)
+    from .inspection_sandboxes import router as sandbox_router
+
+    app.include_router(sandbox_router)
     app.add_middleware(
         TrustedHostMiddleware,
         allowed_hosts=[
@@ -1222,4 +1346,13 @@ def _authoring_write_access(request, repository):
     from .control import _identity as identity
     from .control import _repository_access
 
-    _repository_access(request, identity(request), repository, permission="author")
+    checked = request.app.state.settings.inspection_controller_enabled
+    if checked:
+        _authoring_access(request, repository)
+    _repository_access(
+        request,
+        identity(request),
+        repository,
+        permission="author",
+        github_checked=checked,
+    )

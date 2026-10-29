@@ -1,11 +1,15 @@
+import hashlib
 import json
 import os
 import ssl
+import time
+from collections import OrderedDict
 from contextlib import ExitStack
 from dataclasses import dataclass
 from functools import partial
 from threading import Lock
 from typing import Any
+from uuid import uuid4
 
 import aiohttp
 import anyio
@@ -65,6 +69,10 @@ class GitHubTransport:
         self._portal = None
         self._session = None
         self._closed = False
+        self.request_count = 0
+        self.conditional_hits = 0
+        self.counter_id = uuid4().hex
+        self._conditional = OrderedDict()
 
     def request(self, method: str, path: str, **kwargs) -> GitHubResponse:
         """Perform a request using the process's shared connection pool.
@@ -84,6 +92,7 @@ class GitHubTransport:
         with self._lock:
             if self._closed:
                 raise RuntimeError("GitHub transport is closed")
+            self.request_count += 1
             if self._portal is None:
                 self._portal = self._lifecycle.enter_context(
                     start_blocking_portal(name="github-http")
@@ -109,17 +118,57 @@ class GitHubTransport:
                 timeout=aiohttp.ClientTimeout(total=20),
                 trust_env=True,
             )
+        key = _conditional_key(method, path, kwargs)
+        cached = self._conditional.get(key)
+        if cached and time.monotonic() - cached[2] >= 300:
+            self._conditional.pop(key, None)
+            cached = None
+        if cached:
+            kwargs = {
+                **kwargs,
+                "headers": {**kwargs.get("headers", {}), "If-None-Match": cached[0]},
+            }
         try:
             async with self._session.request(
                 method, path, allow_redirects=False, **kwargs
             ) as response:
-                return GitHubResponse(response.status, await response.read())
+                return self._conditional_response(
+                    key,
+                    cached,
+                    GitHubResponse(response.status, await response.read()),
+                    response.headers.get("etag"),
+                )
         except (aiohttp.ClientError, TimeoutError) as exc:
             raise ComposerError(
                 "GitHub is temporarily unreachable. Please retry.", 502
             ) from exc
 
+    def _conditional_response(self, key, cached, response, etag):
+        if response.status_code == 304:
+            if not cached:
+                return response
+            self.conditional_hits += 1
+            response, etag = cached[1], etag or cached[0]
+        if (
+            key
+            and response.status_code == 200
+            and etag
+            and len(response.content) <= 512 * 1024
+        ):
+            self._conditional[key] = (etag, response, time.monotonic())
+            self._conditional.move_to_end(key)
+            while (
+                len(self._conditional) > 128
+                or sum(len(entry[1].content) for entry in self._conditional.values())
+                > 4 * 1024**2
+            ):
+                self._conditional.popitem(last=False)
+        elif key:
+            self._conditional.pop(key, None)
+        return response
+
     async def _close_session(self):
+        self._conditional.clear()
         if self._session is not None:
             await self._session.close()
             # Allow TLS transports to close before stopping their event loop.
@@ -140,3 +189,21 @@ class GitHubTransport:
                     self._portal.call(self._close_session)
             finally:
                 self._lifecycle.close()
+
+
+def _conditional_key(method, path, options):
+    headers = {
+        name.lower(): value for name, value in options.get("headers", {}).items()
+    }
+    if (
+        method != "GET"
+        or not headers.get("authorization")
+        or "if-none-match" in headers
+        or "if-modified-since" in headers
+    ):
+        return None
+    return hashlib.sha256(
+        json.dumps(
+            [path, options.get("params"), headers], sort_keys=True, default=str
+        ).encode()
+    ).hexdigest()

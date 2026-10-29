@@ -31,6 +31,21 @@ supervisor:
   memory: 1Gi
 inspectionWaitTimeout: 180
 inspectionPollInterval: 0.25
+inspectionPool:
+  enabled: false
+  replicas: 1
+  ready: 15
+  active: 15
+  total: 30
+  startConcurrency: 8
+  idleTtl: 900
+  recoveryInterval: 30
+  cacheTtl: 3600
+  cpu: "1"
+  memory: 512Mi
+  resources:
+    requests: {cpu: 100m, memory: 256Mi}
+    limits: {cpu: "1", memory: 512Mi}
 recovery:
   resources:
     requests: {cpu: 100m, memory: 256Mi}
@@ -55,5 +70,8 @@ serviceAccounts:
     name: ""
     annotations: {}
   supervisor:
+    name: ""
+    annotations: {}
+  inspection:
     name: ""
     annotations: {}

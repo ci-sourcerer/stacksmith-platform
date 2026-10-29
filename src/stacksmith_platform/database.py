@@ -147,6 +147,31 @@ scheduler_health = _table(
     "scheduler_health", Column("completed", Float), Column("error", Text)
 )
 
+inspection_editors = _table(
+    "inspection_editors",
+    Column("generation", Integer, nullable=False),
+    Column("updated", Float, nullable=False),
+)
+inspection_sandboxes = _table(
+    "inspection_sandboxes",
+    Column("image", String, nullable=False),
+    Column("status", String, nullable=False, index=True),
+    Column("token_digest", String, nullable=False),
+    Column("token", Text, nullable=False),
+    Column("created", Float, nullable=False),
+    Column("expires", Float, nullable=False),
+    Column("owner", String),
+    Column("lease", Float),
+    Column("run", String, unique=True),
+    Column("assignment", Text),
+)
+inspection_cache = _table(
+    "inspection_cache",
+    Column("key", String, nullable=False),
+    Column("encryption_key", Text, nullable=False),
+    Column("expires", Float, nullable=False, index=True),
+)
+
 
 class Database:
     """Provide transactional storage and encryption for platform records.
@@ -196,7 +221,14 @@ class Database:
         with self.engine.begin() as connection:
             if self.engine.dialect.name == "sqlite":
                 connection.exec_driver_sql("BEGIN IMMEDIATE")
-            yield connection
+            try:
+                yield connection
+            finally:
+                notifications = connection.info.pop("inspection_notifications", ())
+        if notifications:
+            from .inspection_notifications import publish_local
+
+            publish_local(str(self.engine.url), notifications)
 
     def encrypt(self, value: str) -> str:
         """Encrypt a secret value.

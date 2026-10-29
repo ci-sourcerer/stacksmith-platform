@@ -97,6 +97,7 @@ stacksmith-platform = "stacksmith_platform.__main__:main"
 stacksmith-platform-supervise = "stacksmith_platform.supervision:supervise_main"
 stacksmith-platform-maintain = "stacksmith_platform.supervision:maintain_main"
 stacksmith-platform-worker = "stacksmith_platform.worker:main"
+stacksmith-platform-inspections = "stacksmith_platform.inspection_controller:main"
 stacksmith-platform-execute = "stacksmith_platform.execution:main"
 stacksmith-platform-init = "stacksmith_platform.admin:main"
 

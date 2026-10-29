@@ -67,6 +67,14 @@ def _run(*arguments, debug=None, check=True, capture_output=False, environment=N
             "--file",
             "compose.yaml",
             *(
+                ["--profile", "inspection-pool"]
+                if dotenv_values(".env")
+                .get("STACKSMITH_PLATFORM_INSPECTION_CONTROLLER_ENABLED", "false")
+                .lower()
+                == "true"
+                else []
+            ),
+            *(
                 ["--file", "compose.debug.yaml"]
                 if (debug if debug is not None else _MODE.exists())
                 else []

@@ -287,6 +287,35 @@ def test_targeted_discovery_preserves_custom_properties():
     ] == {"stacksmith": "stack"}
 
 
+@pytest.mark.parametrize("hint_status", [200, 403, 404])
+def test_targeted_discovery_freshly_verifies_installation_hint(hint_status):
+    fixture = DiscoveryFixture()
+    requested = []
+
+    def handle(request):
+        requested.append(request.url.path)
+        if (
+            request.url.path == "/user/installations/99/repositories"
+            and hint_status != 200
+        ):
+            return httpx.Response(hint_status)
+        return fixture.handle(request)
+
+    if hint_status == 403:
+        with pytest.raises(ComposerError, match="access was denied"):
+            GitHubClient("token", _transport(handle)).repositories("org/stacks", 99)
+        assert requested == ["/user/installations/99/repositories"]
+    else:
+        assert (
+            GitHubClient("token", _transport(handle)).repositories("org/stacks", 99)[0][
+                "name"
+            ]
+            == "org/stacks"
+        )
+        assert ("/user/installations" in requested) == (hint_status == 404)
+        assert not any("unrelated" in path for path in requested)
+
+
 @pytest.mark.parametrize("status", [403, 404])
 def test_targeted_discovery_checks_current_repository_access(status):
     fixture = DiscoveryFixture()

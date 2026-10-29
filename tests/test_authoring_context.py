@@ -155,6 +155,69 @@ def test_review_uses_environment_and_returns_context(platform, snapshot, monkeyp
 
 
 @pytest.mark.parametrize("environment", [None, "dev"])
+def test_controller_review_awaits_async_adapter_and_rechecks_access(
+    platform, snapshot, monkeypatch, environment
+):
+    import asyncio
+
+    import stacksmith_platform.app as app_module
+
+    platform.settings.inspection_controller_enabled = True
+    monkeypatch.setattr(
+        "stacksmith_platform.inspection_inputs.prepare_inputs",
+        lambda request, context: context,
+    )
+    discovery = Mock(wraps=app_module._repository_discovery)
+    monkeypatch.setattr(app_module, "_repository_discovery", discovery)
+    observed = []
+
+    async def inspect(adapter, source, edits, path, token):
+        observed.append((asyncio.get_running_loop(), adapter.editor))
+        return {
+            "source": source,
+            "catalog": {"database": {"outputs": []}},
+            "associations": {"rules": []},
+        }
+
+    monkeypatch.setattr(
+        "stacksmith_platform.adapter.StacksmithAdapter.areview", inspect
+    )
+    response = platform.client.post(
+        "/api/review",
+        json={
+            "snapshot": "signed",
+            "environment": environment,
+            "components": {"database": {"type": "database"}},
+            "editor_id": "tab-1",
+            "generation": 2,
+        },
+    )
+    assert response.status_code == 200, response.text
+    assert len(observed) == 1
+    assert observed[0][1]["actor"] == "admin"
+    assert observed[0][1]["editor_id"] == "tab-1"
+    assert discovery.call_count == 2
+
+
+def test_controller_rejects_unpaired_editor_metadata(platform, snapshot, monkeypatch):
+    platform.settings.inspection_controller_enabled = True
+    monkeypatch.setattr(
+        "stacksmith_platform.inspection_inputs.prepare_inputs",
+        lambda request, context: context,
+    )
+    response = platform.client.post(
+        "/api/review",
+        json={
+            "snapshot": "signed",
+            "components": {"database": {"type": "database"}},
+            "editor_id": "tab-1",
+        },
+    )
+    assert response.status_code == 422
+    assert "both editor_id and generation" in response.json()["detail"]
+
+
+@pytest.mark.parametrize("environment", [None, "dev"])
 def test_review_reuses_preflight_discovery_but_rechecks_access_after_inspection(
     platform, snapshot, monkeypatch, environment
 ):
@@ -496,3 +559,26 @@ def test_preview_worker_checks_access_and_never_supplies_credentials(
     inspection["config"] = "stale-config"
     with pytest.raises(ComposerError, match="configuration changed"):
         platform.worker._inspection_credentials(inspection)
+
+
+def test_moving_dependency_rejects_completed_review(platform, snapshot, monkeypatch):
+    from types import SimpleNamespace
+
+    from stacksmith_platform.app import _check_inspection_context
+
+    monkeypatch.setattr("stacksmith_platform.app._authoring_access", Mock())
+    monkeypatch.setattr(
+        "stacksmith_platform.inspection_inputs.prepare_inputs",
+        Mock(return_value={"_input_manifest": {"digest": "new"}}),
+    )
+    with pytest.raises(ComposerError, match="dependencies changed"):
+        _check_inspection_context(
+            SimpleNamespace(app=platform.app, state=SimpleNamespace()),
+            {
+                "repository": "acme/service",
+                "config_revision": "configuration",
+                "environment": None,
+                "_input_manifest": {"digest": "old"},
+            },
+            None,
+        )

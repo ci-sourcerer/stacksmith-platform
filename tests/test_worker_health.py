@@ -67,7 +67,9 @@ def test_inspection_polling_has_an_independent_cadence(database, monkeypatch, in
         SimpleNamespace(
             database=database,
             identifier="worker-a",
-            settings=SimpleNamespace(inspection_poll_interval=interval),
+            settings=SimpleNamespace(
+                inspection_poll_interval=interval, inspection_controller_enabled=False
+            ),
             tick=lambda **kwargs: ticks.append((now[0], kwargs)),
             _reconcile_inspections=lambda: inspections.append(now[0]),
         ),
@@ -100,7 +102,9 @@ def test_slow_inspection_does_not_trigger_catch_up_polling(database, monkeypatch
         SimpleNamespace(
             database=database,
             identifier="worker-a",
-            settings=SimpleNamespace(inspection_poll_interval=0.25),
+            settings=SimpleNamespace(
+                inspection_poll_interval=0.25, inspection_controller_enabled=False
+            ),
             tick=lambda **kwargs: ticks.append(now[0]),
             _reconcile_inspections=inspect,
         ),

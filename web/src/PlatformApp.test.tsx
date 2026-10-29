@@ -93,6 +93,7 @@ vi.mock("./components/Canvas", () => ({
 let root: Root;
 let container: HTMLDivElement;
 let execution: boolean;
+let inspectionPool: boolean;
 let administrator: boolean;
 let login: string;
 let repositories: string[];
@@ -172,6 +173,7 @@ beforeEach(() => {
     "plan_infrastructure",
   ];
   execution = true;
+  inspectionPool = false;
   administrator = true;
   login = "operator";
   repositories = ["acme/service", "acme/other"];
@@ -192,6 +194,7 @@ beforeEach(() => {
         mode,
         login: mode === "demo" || !signedIn ? null : login,
         execution_enabled: execution,
+        inspection_controller_enabled: inspectionPool,
       } as never;
     if (path === "/v1/me")
       return { administrator, provisioner: administrator, login } as never;
@@ -1454,6 +1457,58 @@ it("opens the canvas before review and uses its catalog without duplicate inspec
   expect(vi.mocked(api).mock.calls.some(([path]) => path === "/source")).toBe(
     false,
   );
+});
+
+it("does not render independent source for controller-backed diagram edits", async () => {
+  inspectionPool = true;
+  vi.useFakeTimers();
+  localStorage.setItem(workspaceKey(login), JSON.stringify(workspace));
+  await render("/#/stacks/acme/service/stack.yaml");
+  await inspect();
+  await click('button[aria-label="Add Service"]');
+  await inspect();
+  expect(vi.mocked(api).mock.calls.some(([path]) => path === "/source")).toBe(
+    false,
+  );
+  expect(
+    vi.mocked(api).mock.calls.filter(([path]) => path === "/review"),
+  ).toHaveLength(2);
+});
+
+it("reuses current review source while Review is visible", async () => {
+  inspectionPool = true;
+  vi.useFakeTimers();
+  localStorage.setItem(workspaceKey(login), JSON.stringify(workspace));
+  await render("/#/stacks/acme/service/stack.yaml");
+  await inspect();
+  await click('button[aria-label="Add Service"]');
+  await click("button", "Review changes");
+  await inspect();
+  await inspect();
+  expect(vi.mocked(api).mock.calls.some(([path]) => path === "/source")).toBe(
+    false,
+  );
+});
+
+it("renders independent source after a controller review fails", async () => {
+  inspectionPool = true;
+  vi.useFakeTimers();
+  localStorage.setItem(workspaceKey(login), JSON.stringify(workspace));
+  const respond = vi.mocked(api).getMockImplementation()!;
+  vi.mocked(api).mockImplementation((path, ...args) =>
+    path === "/review"
+      ? Promise.reject(new Error("Invalid association"))
+      : respond(path, ...args),
+  );
+  await render("/#/stacks/acme/service/stack.yaml");
+  await inspect();
+  await click('button[aria-label="Add Service"]');
+  await click("button", "Review changes");
+  await inspect();
+  await inspect();
+  expect(
+    vi.mocked(api).mock.calls.filter(([path]) => path === "/source"),
+  ).toHaveLength(1);
 });
 
 it("loads a fallback catalog after failed inspection so the draft remains editable", async () => {

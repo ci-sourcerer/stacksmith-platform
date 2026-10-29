@@ -161,6 +161,7 @@ export default function App() {
   const [sourceFailure, setSourceFailure] = useState<unknown>();
   const [inspectionAttempt, setInspectionAttempt] = useState(0);
   const [sourceAttempt, setSourceAttempt] = useState(0);
+  const sourceGeneration = useRef(0);
   const [recovery, setRecovery] = useState<Recovery>();
   const [storageError, setStorageError] = useState("");
   const [savedDraft, setSavedDraft] = useState(false);
@@ -501,6 +502,8 @@ export default function App() {
     semanticKey,
     Boolean(snapshot?.editable),
     inspectionAttempt,
+    Boolean(session.inspection_controller_enabled),
+    sourceKey,
   );
 
   useEffect(() => {
@@ -581,6 +584,18 @@ export default function App() {
           snapshot.document.metadata?.stacksmith_composer?.routes ?? [],
         )),
   );
+  const inspectedSource = session.inspection_controller_enabled
+    ? draftReview.result
+    : undefined;
+  const inspectedSourceKey = session.inspection_controller_enabled
+    ? semanticKey
+    : undefined;
+  const requestedSourceView = session.inspection_controller_enabled
+    ? view
+    : undefined;
+  const pendingSourceReview = session.inspection_controller_enabled
+    ? draftReview.inspecting
+    : undefined;
   useEffect(() => {
     setPr(undefined);
     setSourceError("");
@@ -590,11 +605,34 @@ export default function App() {
       setRendered({ key: sourceKey, source: snapshot.source, diff: "" });
       return;
     }
+    if (session.inspection_controller_enabled) {
+      if (
+        inspectedSource?.key === inspectedSourceKey &&
+        inspectedSource?.sourceKey === sourceKey
+      ) {
+        setRendered({
+          key: sourceKey,
+          source: inspectedSource.review.source,
+          diff: inspectedSource.review.diff,
+        });
+        return;
+      }
+      if (requestedSourceView !== "review") return;
+      if (pendingSourceReview) return;
+    }
     const abort = new AbortController();
     const timer = setTimeout(() => {
       api<Pick<Review, "source" | "diff">>(
         "/source",
-        JSON.parse(sourceKey),
+        {
+          ...JSON.parse(sourceKey),
+          ...(session.inspection_controller_enabled
+            ? {
+                editor_id: draftReview.editorId,
+                generation: ++sourceGeneration.current,
+              }
+            : {}),
+        },
         abort.signal,
       )
         .then((result) => {
@@ -611,7 +649,17 @@ export default function App() {
       clearTimeout(timer);
       abort.abort();
     };
-  }, [snapshot?.editable, sourceKey, sourceAttempt, dirty]);
+  }, [
+    snapshot?.editable,
+    sourceKey,
+    sourceAttempt,
+    dirty,
+    session.inspection_controller_enabled,
+    requestedSourceView,
+    inspectedSource,
+    inspectedSourceKey,
+    pendingSourceReview,
+  ]);
 
   useEffect(
     () => registerGuard(confirmStackChange),

@@ -168,6 +168,8 @@ Cancel sends a termination request to the execution runtime. Cancellation of a c
 
 Never expose object-store credentials or schema-administrator database credentials to run Pods. Platform secrets must not be included in container builds, repository configuration, or browser recovery files. The Helm chart references existing Secrets instead of rendering secret values into release manifests.
 
+The optional [shared inspection controller](inspection-controller.md) replaces the inspection scheduling described above when enabled. It uses PostgreSQL notifications, runtime event streams, and prestarted single-use sandboxes in both deployment modes. Migration `0007` is required. Keep it opt-in until the separate Compose and Kubernetes capacity acceptance tests pass.
+
 ## GitHub installation setup
 
 Configure the App setup URL as `<public origin>/api/auth/setup` and enable **Redirect on update**. Keep the user authorization callback at `<public origin>/api/auth/callback` and the webhook at `<public origin>/api/v1/webhooks/github`. Subscribe to repository events for rename updates; installation and installation-repository events are delivered automatically by GitHub. Setup returns verify the installation against the signed-in user before opening Settings > GitHub connection.

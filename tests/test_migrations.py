@@ -54,7 +54,7 @@ def test_upgrade_repeat_downgrade_and_metadata_agreement(migration_engine):
             connection.exec_driver_sql("SELECT id FROM repositories").scalar_one()
             == "saved"
         )
-        assert MigrationContext.configure(connection).get_current_heads() == ("0006",)
+        assert MigrationContext.configure(connection).get_current_heads() == ("0007",)
         assert not compare_metadata(
             MigrationContext.configure(
                 connection, opts={"compare_server_default": True}
@@ -67,7 +67,7 @@ def test_upgrade_repeat_downgrade_and_metadata_agreement(migration_engine):
         assert set(inspect(connection).get_table_names()) == {"alembic_version"}
     migration.upgrade(migration_engine)
     with migration_engine.connect() as connection:
-        assert MigrationContext.configure(connection).get_current_heads() == ("0006",)
+        assert MigrationContext.configure(connection).get_current_heads() == ("0007",)
 
 
 def test_offline_sql_requires_no_database(monkeypatch):
@@ -241,7 +241,7 @@ def test_autogeneration_writes_current_source_and_detects_drift(tmp_path, monkey
         )
         if not any(
             revision in path.name
-            for revision in ("0001", "0002", "0003", "0004", "0005", "0006")
+            for revision in ("0001", "0002", "0003", "0004", "0005", "0006", "0007")
         )
     ]
     assert len(generated) == 1

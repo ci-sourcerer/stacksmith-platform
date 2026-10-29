@@ -90,6 +90,40 @@ def test_chart_exposes_inspection_poll_interval_override():
             } in resource["spec"]["template"]["spec"]["containers"][0]["env"]
 
 
+def test_pool_chart_adds_shared_controller_and_execution_watch_permissions():
+    resources = _render("--set", "inspectionPool.enabled=true")
+    controller = next(
+        resource
+        for resource in resources
+        if resource["kind"] == "Deployment"
+        and resource["metadata"]["name"] == "test-inspections"
+    )["spec"]["template"]["spec"]
+    assert controller["serviceAccountName"] == "test-inspection"
+    assert controller["containers"][0]["command"] == ["stacksmith-platform-inspections"]
+    assert {
+        "name": "STACKSMITH_PLATFORM_INSPECTION_POOL_TOTAL",
+        "value": "30",
+    } in controller["containers"][0]["env"]
+    role = next(
+        resource
+        for resource in resources
+        if resource["kind"] == "Role"
+        and resource["metadata"]["name"] == "test-supervisor"
+    )
+    assert "watch" in role["rules"][0]["verbs"]
+    binding = next(
+        resource
+        for resource in resources
+        if resource["kind"] == "RoleBinding"
+        and resource["metadata"]["name"] == "test-supervisor"
+    )
+    assert {
+        "kind": "ServiceAccount",
+        "name": "test-inspection",
+        "namespace": "control",
+    } in binding["subjects"]
+
+
 def test_frontend_owns_ingress_without_receiving_api_secrets():
     resources = _render("--set", "ingress.enabled=true")
     frontend = next(
