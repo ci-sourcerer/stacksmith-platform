@@ -42,7 +42,7 @@ def main() -> None:
     sys.exit(
         0
         if healthy(
-            Database(settings.database_url, settings.secret_key),
+            Database.from_settings(settings, pool_size=1),
             settings.worker_id or socket.gethostname(),
             time.time(),
         )

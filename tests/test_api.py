@@ -71,24 +71,6 @@ def test_source_exports_a_draft_that_fails_inspection(client):
     assert "type: not-catalogued" in response.json()["source"]
 
 
-def test_controller_source_remains_available_without_managed_configuration(
-    client, tmp_path, monkeypatch
-):
-    from unittest.mock import AsyncMock
-
-    from conftest import _fake_author
-
-    draft = _draft(client)
-    client.app.state.settings.inspection_controller_enabled = True
-    client.app.state.settings.config = tmp_path / "unavailable-config.yaml"
-    monkeypatch.setattr(
-        "stacksmith_platform.adapter.StacksmithAdapter.aauthor",
-        AsyncMock(side_effect=_fake_author),
-    )
-    response = client.post("/api/source", json=draft)
-    assert response.status_code == 200, response.text
-
-
 def test_structural_graph_does_not_invoke_authoring_or_resolution(client):
     draft = _draft(client)
     draft["components"]["request_reader"]["properties"]["nested"] = {
@@ -119,7 +101,7 @@ def test_snapshot_tampering_is_rejected(client, path):
     assert client.post(path, json=draft).status_code == 409
 
 
-@pytest.mark.parametrize("path", ["/api/review", "/api/resolution", "/api/source"])
+@pytest.mark.parametrize("path", ["/api/review", "/api/resolution"])
 def test_config_change_requires_reopening(client, tmp_path, path):
     draft = _draft(client)
     client.app.state.settings.config = tmp_path / "new-config.yaml"

@@ -129,19 +129,6 @@ def test_environment_inputs_substitute_draft_without_changing_stack_layer_order(
     )
 
 
-def test_only_direct_stack_environments_prove_static_catalog_inputs(context_runtime):
-    proof = {}
-    _environment_inputs(context_runtime.inspection, proof)
-    assert proof == {"static": False}
-    context_runtime.discover.return_value = {
-        "matrix": [{"environment": "dev", "stack": "stack.yaml"}]
-    }
-    context_runtime.runfile.configs = []
-    context_runtime.runfile.vars = []
-    _environment_inputs(context_runtime.inspection, proof)
-    assert proof == {"static": True}
-
-
 @pytest.mark.parametrize("mode", ["single", "folders", "flat-files", "env-files"])
 def test_inspection_uses_selected_discovery_mode(context_runtime, mode):
     context_runtime.inspection["context"]["settings"]["discovery_mode"] = mode
@@ -210,6 +197,10 @@ def test_context_inspections_share_layered_inputs(
 def test_compound_review_authors_and_discovers_once_with_shared_inputs(
     context_runtime, monkeypatch
 ):
+    monkeypatch.setattr(
+        "stacksmith_platform.authoring_inspection._editing_context",
+        Mock(return_value=None),
+    )
     author = Mock(return_value=SimpleNamespace(source="name: draft\ncomponents: {}\n"))
     monkeypatch.setitem(
         sys.modules,

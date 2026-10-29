@@ -1,16 +1,12 @@
-import asyncio
 import json
 import logging
 import os
 import shutil
-import subprocess
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from threading import BoundedSemaphore
-from typing import Any, Literal
+from typing import Any
 from urllib.parse import parse_qs, quote, urlparse
-
-from pydantic import BaseModel, ConfigDict, ValidationError
 
 from .certificates import ca_environment
 from .configuration import config_arguments
@@ -27,13 +23,13 @@ class StacksmithAdapter:
     Args:
         settings: Administrator-owned command and managed configuration settings.
         context: Server-selected repository and environment inspection context.
-        editor: Optional server-scoped automatic review identity and generation.
+        database: Process-owned query pool shared with the API.
     """
 
-    def __init__(self, settings: Settings, context: dict | None = None, editor=None):
+    def __init__(self, settings: Settings, context: dict | None = None, database=None):
         self.settings = settings
         self.context = context
-        self.editor = editor
+        self.database = database
         self.slots = BoundedSemaphore(2)
         self.command = shutil.which(settings.stacksmith_command)
         if self.command:
@@ -67,7 +63,7 @@ class StacksmithAdapter:
         if self.settings.execution_enabled:
             from .inspection import InspectionQueue
 
-            return InspectionQueue(self.settings).execute(
+            return InspectionQueue(self.settings, database=self.database).execute(
                 args,
                 source,
                 github_token,
@@ -129,7 +125,7 @@ class StacksmithAdapter:
     def author(
         self, source: str, edits: list[dict[str, Any]], path: str
     ) -> dict[str, Any]:
-        """Propose authored edits through the separately installed Stacksmith CLI.
+        """Propose authored edits through the pinned Stacksmith library.
 
         Args:
             source: Original authored stack source.
@@ -140,19 +136,11 @@ class StacksmithAdapter:
             Version 1 document-validated source, diff, and change indicator.
 
         Raises:
-            ComposerError: If the CLI is unavailable or rejects the request.
+            ComposerError: The document or edits are invalid.
         """
-        return json.loads(
-            self._run(
-                ["author"],
-                authoring_request={
-                    "version": 1,
-                    "source": source,
-                    "edits": edits,
-                    "path": path,
-                },
-            )
-        )
+        from .editing_contexts import author_source
+
+        return author_source(source, edits, path)
 
     def catalog(self, github_token: str | None = None) -> dict[str, Any]:
         """Return module inspection metadata from the configured Stacksmith CLI.
@@ -230,139 +218,6 @@ class StacksmithAdapter:
         """
         return self._json(["info", "associations"], source, github_token)
 
-    async def _arun(self, args, source=None, github_token=None, authoring_request=None):
-        if (
-            not self.settings.execution_enabled
-            or not self.settings.inspection_controller_enabled
-        ):
-            return await asyncio.to_thread(
-                self._run, args, source, github_token, authoring_request
-            )
-        from .inspection import InspectionQueue
-
-        return await InspectionQueue(self.settings).aexecute(
-            args, source, github_token, authoring_request, self.context, self.editor
-        )
-
-    async def areview(self, source, edits, path, github_token=None):
-        """Await an isolated compound review without occupying an API thread.
-
-        Args:
-            source: Original source document.
-            edits: Ordered authored edits.
-            path: Original stack path.
-            github_token: Current authorized token.
-
-        Returns:
-            Source, catalog, and association metadata.
-
-        Raises:
-            ComposerError: Inspection is rejected or fails.
-        """
-        if (
-            not self.settings.execution_enabled
-            or not self.settings.inspection_controller_enabled
-        ):
-            return await asyncio.to_thread(
-                self.review, source, edits, path, github_token
-            )
-        result = json.loads(
-            await self._arun(
-                ["review"],
-                github_token=github_token,
-                authoring_request={
-                    "version": 1,
-                    "source": source,
-                    "edits": edits,
-                    "path": path,
-                },
-            )
-        )
-        LOGGER.info("Stacksmith review stage timings: %s", result.pop("timings", {}))
-        result["catalog"] = _relative_module_sources(
-            result["catalog"], self.settings.module_source_prefix
-        )
-        return result
-
-    async def aauthor(self, source, edits, path):
-        """Await authored source independently of managed inspection.
-
-        Args:
-            source: Original source document.
-            edits: Ordered authored edits.
-            path: Original stack path.
-
-        Returns:
-            A validated authoring proposal.
-
-        Raises:
-            ComposerError: Authoring fails.
-        """
-        return json.loads(
-            await self._arun(
-                ["author"],
-                authoring_request={
-                    "version": 1,
-                    "source": source,
-                    "edits": edits,
-                    "path": path,
-                },
-            )
-        )
-
-    async def acatalog(self, github_token=None):
-        """Await managed component metadata.
-
-        Args:
-            github_token: Current authorized token.
-
-        Returns:
-            Component metadata keyed by managed type.
-
-        Raises:
-            ComposerError: Catalog inspection fails.
-        """
-        if not self.settings.inspection_controller_enabled:
-            return await asyncio.to_thread(self.catalog, github_token)
-        return _relative_module_sources(
-            json.loads(
-                await self._arun(
-                    ["info", "modules-and-policies", "--format", "json"],
-                    github_token=github_token,
-                )
-            ),
-            self.settings.module_source_prefix,
-        )
-
-    async def aresolution(self, source, github_token=None, query=None):
-        """Await resolved values without occupying an API thread.
-
-        Args:
-            source: Current authored source.
-            github_token: Current authorized token.
-            query: Optional configuration address.
-
-        Returns:
-            Resolved values and provenance.
-
-        Raises:
-            ComposerError: Resolution fails.
-        """
-        return json.loads(
-            await self._arun(
-                [
-                    "info",
-                    "explain",
-                    *([query] if query else []),
-                    "--show-values",
-                    "--format",
-                    "json",
-                ],
-                source,
-                github_token,
-            )
-        )
-
     def resolution(
         self, source: str, github_token: str | None = None, query: str | None = None
     ) -> dict[str, Any]:
@@ -384,42 +239,6 @@ class StacksmithAdapter:
             source,
             github_token,
         )
-
-
-class _AuthoringProposal(BaseModel):
-    model_config = ConfigDict(extra="forbid", strict=True)
-
-    version: Literal[1]
-    validation: Literal["document"]
-    source: str
-    diff: str
-    changed: bool
-
-
-def _authoring_response(result: subprocess.CompletedProcess[str]) -> dict[str, Any]:
-    if result.returncode:
-        try:
-            response = json.loads(result.stdout)
-        except json.JSONDecodeError as exc:
-            raise ComposerError(
-                "Stacksmith must support the version 1 authoring CLI.", 502
-            ) from exc
-        if (
-            isinstance(response, dict)
-            and response.get("version") == 1
-            and isinstance(response.get("error"), dict)
-            and response["error"].get("code") == "invalid_document"
-        ):
-            raise ComposerError(
-                "Stacksmith rejected this authored document. Review its source and field values."
-            )
-        raise ComposerError("Stacksmith must support the version 1 authoring CLI.", 502)
-    try:
-        return _AuthoringProposal.model_validate_json(result.stdout).model_dump()
-    except ValidationError as exc:
-        raise ComposerError(
-            "Stacksmith returned an incompatible authoring response.", 502
-        ) from exc
 
 
 def _subprocess_environment(github_token: str | None) -> dict[str, str]:

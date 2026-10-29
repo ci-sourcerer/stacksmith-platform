@@ -70,7 +70,15 @@ def prepare_inputs(request, context):
     manifest["digest"] = hashlib.sha256(
         json.dumps(manifest, sort_keys=True).encode()
     ).hexdigest()
-    return {**context, "_input_manifest": manifest}
+    return {
+        **context,
+        "_input_manifest": manifest,
+        **(
+            {"_config_source": layers[0][1]}
+            if len(layers) == 1 and not str(layers[0][0]).startswith("git+")
+            else {}
+        ),
+    }
 
 
 def _catalog_configuration(content):

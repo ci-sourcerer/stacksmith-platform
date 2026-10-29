@@ -29,6 +29,7 @@ from .database import (
     execution_credential_sessions,
     locks,
     phase_claims,
+    prepared_contexts,
     repositories,
     row,
     runs,
@@ -69,10 +70,8 @@ def _serve(worker, stop):
                 next_tick = time.monotonic() + 2
             if not stop.is_set() and time.monotonic() >= next_inspection:
                 worker._reconcile_inspections()
-                next_inspection = time.monotonic() + (
-                    30
-                    if worker.settings.inspection_controller_enabled
-                    else worker.settings.inspection_poll_interval
+                next_inspection = (
+                    time.monotonic() + worker.settings.inspection_poll_interval
                 )
             stop.wait(max(0, min(next_tick, next_inspection) - time.monotonic()))
     finally:
@@ -198,15 +197,7 @@ class RunReconciler:
             connection.execute(
                 runs.update()
                 .where(runs.c.id == run["id"])
-                .values(
-                    worker=self.identifier,
-                    lease=time.time()
-                    + (
-                        self.settings.inspection_recovery_interval
-                        if run["spec"].get("inspection_controller")
-                        else 120
-                    ),
-                )
+                .values(worker=self.identifier, lease=time.time() + 120)
             )
         if run["status"] == "queued":
             self._start(run)
@@ -1008,7 +999,7 @@ class RunReconciler:
     def _start_inspection(self, run):
         key = Fernet.generate_key()
         claim = random_secrets.token_urlsafe(48)
-        prefix = f"executions/{run['id']}/inspection/{uuid4().hex}"
+        prefix = f"executions/{run['id']}/inspection"
         inspection = json.loads(self.database.decrypt(run["spec"]["_inspection"]))
         try:
             inspection["credentials"] = self._inspection_credentials(inspection)
@@ -1037,7 +1028,7 @@ class RunReconciler:
             return
         execution = {
             "run": run["id"],
-            "name": self._inspection_execution_name(run),
+            "name": f"ss-{run['id']}-0",
             "input": f"{prefix}/input",
             "result": f"{prefix}/result",
             "claim_digest": hashlib.sha256(claim.encode()).hexdigest(),
@@ -1068,16 +1059,6 @@ class RunReconciler:
             )
             + f"/api/v1/executions/{run['id']}/claim",
             "claim_token": claim,
-            **(
-                {
-                    "completion_url": (
-                        self.settings.execution_callback_url or self.settings.public_url
-                    )
-                    + f"/api/v1/executions/{run['id']}/inspection-result"
-                }
-                if run["spec"].get("inspection_controller")
-                else {}
-            ),
             "result_output_url": self.storage.url(
                 execution["result"], "put_object", self.settings.command_timeout + 300
             ),
@@ -1117,9 +1098,6 @@ class RunReconciler:
             )
         self._launch(run, execution)
 
-    def _inspection_execution_name(self, run):
-        return f"ss-{run['id']}-0"
-
     def _collect_inspection(self, run, execution, state):
         try:
             result = json.loads(
@@ -1137,20 +1115,6 @@ class RunReconciler:
                 "inspection runtime",
                 "The inspection runtime did not return a result.",
                 "missing_result",
-            )
-        except InvalidToken, json.JSONDecodeError:
-            result = _inspection_failure(
-                "inspection runtime",
-                "The encrypted inspection result is invalid.",
-                "invalid_result",
-                502,
-            )
-        if not _valid_inspection_result(result):
-            result = _inspection_failure(
-                "inspection runtime",
-                "The inspection result has an invalid shape.",
-                "invalid_result",
-                502,
             )
         if state != "succeeded" and not result["exit_code"]:
             result = _inspection_failure(
@@ -1198,12 +1162,6 @@ class RunReconciler:
                 result={
                     "_inspection_result": self.database.encrypt(json.dumps(result)),
                     **(
-                        {"superseded": True}
-                        if result.get("diagnostics", {}).get("code")
-                        == "inspection_superseded"
-                        else {}
-                    ),
-                    **(
                         {
                             "_inspection_output": self.database.encrypt(
                                 result["inspection_output"]
@@ -1216,10 +1174,6 @@ class RunReconciler:
             )
         )
         self._finish(connection, run, status)
-
-        from .inspection_notifications import notify
-
-        notify(connection, run["id"])
 
     def _artifact(self, connection, run, name, key, digest, private):
         connection.execute(
@@ -1241,6 +1195,11 @@ class RunReconciler:
 
     def _purge(self):
         with self.database.transaction() as connection:
+            connection.execute(
+                prepared_contexts.delete().where(
+                    prepared_contexts.c.expires <= time.time()
+                )
+            )
             self._expire_metadata(connection, private=True)
             self._expire_metadata(connection, private=False)
             expired = (
@@ -1343,8 +1302,6 @@ class Worker(RunReconciler):
 
     def _reconcile_inspections(self):
         """Poll owned inspections, recover abandoned work, then fill free slots."""
-        if self.settings.inspection_controller_enabled:
-            return
         for identifier in self._inspection_candidates(owned=True):
             self.reconcile_run(identifier)
         for statuses in [("running", "cancelling"), ("queued",)]:
@@ -1380,7 +1337,6 @@ class Worker(RunReconciler):
                     .with_only_columns(runs.c.id)
                     .where(
                         runs.c.action == "inspection",
-                        runs.c.spec["inspection_controller"].as_boolean().is_not(True),
                         runs.c.supervision.is_(None),
                         runs.c.status.in_(statuses),
                         runs.c.worker == self.identifier
@@ -1426,34 +1382,12 @@ def main() -> None:
     with closing(GitHubTransport()) as transport:
         worker = Worker(
             settings,
-            Database(settings.database_url, settings.secret_key),
+            Database.from_settings(settings, pool_size=1),
             execution_driver(settings),
             artifact_storage(settings),
             GitHubProvider(settings, transport),
         )
         _serve(worker, _STOP)
-
-
-def _valid_inspection_result(result):
-    if (
-        not isinstance(result, dict)
-        or type(result.get("exit_code")) is not int
-        or not 0 <= result["exit_code"] <= 255
-    ):
-        return False
-    if not result["exit_code"] and not isinstance(result.get("inspection_output"), str):
-        return False
-    if "diagnostics" in result:
-        if not isinstance(result["diagnostics"], dict):
-            return False
-        if not isinstance(result["diagnostics"].get("message", ""), str):
-            return False
-        if (
-            type(result["diagnostics"].get("status", 422)) is not int
-            or not 400 <= result["diagnostics"].get("status", 422) <= 599
-        ):
-            return False
-    return True
 
 
 if __name__ == "__main__":

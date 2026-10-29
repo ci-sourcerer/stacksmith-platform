@@ -62,7 +62,6 @@ def _environment(settings):
         "artifact_retention",
         "command_timeout",
         "inspection_wait_timeout",
-        "inspection_poll_interval",
     )
     return [
         {

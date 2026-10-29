@@ -64,6 +64,10 @@ class Editor:
             ValueError: The supplied fixture lacks a representative policy component.
         """
         started = time.monotonic()
+        platform = await self.client.get(
+            "/api/platform", params={"repository": repository}
+        )
+        platform.raise_for_status()
         response = await self.client.get(
             f"/api/repositories/{repository}/stack", params={"path": path}
         )
@@ -281,10 +285,11 @@ def _database_activity(observer, args, since=None):
             f"since={since!r}; "
             'delays=[] if since is None else [list(row) for row in connection.execute(text("'
             "SELECT CAST(execution->>'started' AS DOUBLE PRECISION)-created, updated-CAST(execution->>'started' AS DOUBLE PRECISION) "
-            "FROM runs WHERE action='inspection' AND created>=:since AND spec->>'inspection_priority'='0' "
-            "AND CAST(spec->>'inspection_generation' AS BIGINT)>1 AND status IN ('succeeded','failed','cancelled','expired') AND execution IS NOT NULL"
+            "FROM runs WHERE action='inspection' AND created>=:since "
+            "AND status IN ('succeeded','failed','cancelled','expired') AND execution IS NOT NULL"
             '"), {"since":since})]; '
-            'print(json.dumps({"database":stats,"delays":delays})); '
+            'jobs=connection.execute(text("SELECT count(*) FROM runs WHERE action=:action AND created>=:since"), {"action":"inspection","since":since or 0}).scalar_one(); '
+            'print(json.dumps({"database":stats,"delays":delays,"jobs":jobs})); '
             "connection.close(); engine.dispose()"
         ),
     ]
@@ -317,9 +322,9 @@ def _database_activity(observer, args, since=None):
 async def _observe(client, observer, stop, snapshots):
     while not stop.is_set():
         sample = await asyncio.to_thread(_resources, observer)
-        response = await client.get("/api/inspection-status")
+        response = await client.get("/api/editor-status")
         response.raise_for_status()
-        sample["pool"] = response.json()
+        sample["status"] = response.json()
         snapshots.append(sample)
         try:
             await asyncio.wait_for(stop.wait(), 2)
@@ -405,17 +410,27 @@ def _environment_for(index, args):
 def _report(editors, resources, args):
     latency = _summary([value for editor in editors for value in editor.samples])
     failures = [failure for editor in editors for failure in editor.failures]
-    final_pool = resources[-1]["pool"]
+    final_pool = resources[-1]["status"]
     first_cpu = resources[0]["cpu"]
     last_cpu = resources[-1]["cpu"]
     total_cpu = sum(last_cpu[:8]) - sum(first_cpu[:8])
     idle_cpu = sum(last_cpu[3:5]) - sum(first_cpu[3:5])
     memory_peak = max(sample["memory_used"] for sample in resources)
     memory_budget = min(resources[0]["memory_total"], 16 * 1024**3)
+    query_budget_held = all(
+        sample["status"].get("database_pool", {}).get("capacity")
+        and sample["status"]["database_pool"]["peak_in_use"]
+        <= sample["status"]["database_pool"]["capacity"]
+        and sample["status"]["database_pool"]["checkout_timeouts"] == 0
+        for sample in resources
+    )
     return {
         "users": args.users,
         "duration_seconds": args.duration,
-        "component_range": [1, 25],
+        "component_range": [
+            min(len(editor.body["components"]) for editor in editors),
+            max(len(editor.body["components"]) for editor in editors),
+        ],
         "workload": args.workload,
         "debounce_seconds": 0.4,
         "source_viewers": args.source_users,
@@ -438,9 +453,9 @@ def _report(editors, resources, args):
             [value for editor in editors for value in editor.source_samples]
         ),
         "github_requests": final_pool["github_requests"]
-        - resources[0]["pool"]["github_requests"],
+        - resources[0]["status"]["github_requests"],
         "github_conditional_hits": final_pool["github_conditional_hits"]
-        - resources[0]["pool"]["github_conditional_hits"],
+        - resources[0]["status"]["github_conditional_hits"],
         "failures": failures,
         "superseded": sum(editor.superseded for editor in editors),
         "resource_scope": "Complete Docker VM, including other running workloads and Kubernetes control plane if present",
@@ -448,25 +463,62 @@ def _report(editors, resources, args):
         "peak_vm_memory_gib": memory_peak / 1024**3,
         "memory_headroom_fraction": 1 - memory_peak / memory_budget,
         "mean_vm_cpu_percent": 100 * (1 - idle_cpu / max(1, total_cpu)),
-        "final_pool": final_pool,
+        "final_status": final_pool,
+        "query_connection_budget_held": query_budget_held,
+        "configuration_subscribers": max(
+            sample["status"]["notifications"]["subscribers"] for sample in resources
+        ),
+        "listener_limit_held": all(
+            sample["status"]["notifications"]["listener_connections"] == 1
+            for sample in resources
+        ),
+        "github_counter_consistent": len(
+            {sample["status"]["github_counter_id"] for sample in resources}
+        )
+        == 1,
         "resource_samples": resources,
         "acceptance_run": args.users == 15
         and args.duration >= 600
-        and args.source_users >= 3,
+        and args.source_users >= 3
+        and args.workload == "serverless",
         "passed": bool(
             latency["count"]
             and args.users == 15
             and args.duration >= 600
             and args.source_users >= 3
+            and args.workload == "serverless"
             and latency["p95_seconds"] < 5
             and not failures
-            and final_pool["active"] == final_pool["pending"] == 0
+            and final_pool["contexts"]["pending"] == 0
+            and not any(
+                final_pool["inspections"].get(state, 0)
+                for state in ("queued", "running", "cancelling")
+            )
             and memory_peak <= memory_budget * 0.8
+            and query_budget_held
+            and all(
+                sample["status"]["notifications"]["listener_connections"] == 1
+                and sample["status"]["notifications"]["subscribers"] >= args.users
+                for sample in resources
+            )
+            and len({sample["status"]["github_counter_id"] for sample in resources})
+            == 1
         ),
     }
 
 
 async def _run(args):
+    if (
+        args.users < 1
+        or args.duration <= 0
+        or not 0 <= args.source_users <= args.users
+        or not 0 <= args.environment_users <= args.users
+    ):
+        raise ValueError(
+            "Supply positive users and duration, with source/environment users within the total"
+        )
+    if args.environment_users and not args.environment:
+        raise ValueError("Supply an environment for environment editors")
     cookies = json.loads(Path(args.cookies).read_text())
     if len(cookies) < args.users:
         raise ValueError("Supply one isolated session cookie per editor")
@@ -520,6 +572,11 @@ async def _run(args):
             )
             for index in range(args.users)
         ]
+        for editor in editors:
+            events = await stack.enter_async_context(
+                editor.client.stream("GET", "/api/configuration-events")
+            )
+            events.raise_for_status()
         monitor = asyncio.create_task(
             _observe(editors[0].client, observer, stop, resources)
         )
@@ -531,6 +588,10 @@ async def _run(args):
             await asyncio.gather(
                 *(editor.open(args.repository, args.path) for editor in editors)
             )
+            initial_database = await asyncio.to_thread(
+                _database_activity, observer, args, started
+            )
+            edits_started = time.time()
             print(
                 "All editors loaded; initial loaded-stack edits completed", flush=True
             )
@@ -547,12 +608,12 @@ async def _run(args):
             await monitor
             if kube_monitor:
                 await kube_monitor
-        response = await editors[0].client.get("/api/inspection-status")
+        response = await editors[0].client.get("/api/editor-status")
         response.raise_for_status()
-        resources[-1]["pool"] = response.json()
+        resources[-1]["status"] = response.json()
         report = _report(editors, resources, args)
         database_after = await asyncio.to_thread(
-            _database_activity, observer, args, started
+            _database_activity, observer, args, edits_started
         )
         report["database_activity"] = {
             key: database_after["database"][key] - database_before[key]
@@ -566,7 +627,19 @@ async def _run(args):
         report["execution_wall_time"] = _summary(
             [delay[1] for delay in database_after["delays"]]
         )
-        report["peak_pending"] = max(sample["pool"]["pending"] for sample in resources)
+        report["initial_inspection_jobs"] = initial_database["jobs"]
+        report["inspection_jobs_during_edits"] = database_after["jobs"]
+        report["initial_queue_wait"] = _summary(
+            [delay[0] for delay in initial_database["delays"]]
+        )
+        report["initial_execution_wall_time"] = _summary(
+            [delay[1] for delay in initial_database["delays"]]
+        )
+        report["passed"] = (
+            report["passed"]
+            and database_after["jobs"] == 0
+            and initial_database["jobs"] <= args.users
+        )
         report["oom_events"] = len(docker_ooms)
         report["docker_observation_errors"] = docker_errors
         report["passed"] = report["passed"] and not docker_ooms and not docker_errors

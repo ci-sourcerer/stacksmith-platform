@@ -1,7 +1,11 @@
 import json
+from functools import partial
+from importlib.metadata import version
+from pathlib import Path
 from unittest.mock import Mock
 
 import pytest
+from ruamel.yaml import YAML
 from test_access import _grant
 from test_control import CONFIG, SHA, _login
 from test_control import platform as _platform_fixture
@@ -9,6 +13,83 @@ from test_control import platform as _platform_fixture
 from stacksmith_platform.app import _github
 from stacksmith_platform.database import environments, row
 from stacksmith_platform.errors import ComposerError
+
+
+def _warm_context(platform, snapshot, monkeypatch):
+    from conftest import CATALOG
+
+    snapshot.update(
+        principal="admin",
+        source=json.dumps(
+            {"name": "test", "components": {"policy": {"type": "aws_iam_policy"}}}
+        ),
+    )
+    preparation = Mock(
+        return_value={
+            "source": snapshot["source"],
+            "catalog": CATALOG,
+            "associations": {"rules": [], "applications": []},
+            "_editing_context": {
+                "resolver_version": version("stacksmith"),
+                "config": YAML(typ="safe").load(
+                    Path(__file__).resolve().parents[1] / "examples/platform.yaml"
+                ),
+            },
+        }
+    )
+    monkeypatch.setattr(
+        "stacksmith_platform.adapter.StacksmithAdapter.review", preparation
+    )
+    assert (
+        platform.client.post(
+            "/api/review",
+            json={
+                "snapshot": "signed",
+                "components": json.loads(snapshot["source"])["components"],
+            },
+        ).status_code
+        == 200
+    )
+    return preparation
+
+
+def _change_access_after_resolution(monkeypatch, original, change, *args):
+    result = original(*args)
+    if change == "access":
+        monkeypatch.setattr(
+            "test_control.UserGitHub.repositories", Mock(return_value=[])
+        )
+    else:
+        monkeypatch.setattr(
+            "stacksmith_platform.app._config_revision", Mock(return_value="changed")
+        )
+    return result
+
+
+@pytest.mark.parametrize(
+    ("change", "status"), [("access", 403), ("configuration", 409)]
+)
+def test_warm_reviews_recheck_access_and_configuration_after_resolution(
+    platform, snapshot, monkeypatch, change, status
+):
+    from stacksmith_platform.editing_contexts import _resolve
+
+    preparation = _warm_context(platform, snapshot, monkeypatch)
+    monkeypatch.setattr(
+        "stacksmith_platform.editing_contexts._resolve",
+        partial(_change_access_after_resolution, monkeypatch, _resolve, change),
+    )
+    response = platform.client.post(
+        "/api/review",
+        json={
+            "snapshot": "signed",
+            "components": {
+                "policy": {"type": "aws_iam_policy", "properties": {"name": "updated"}}
+            },
+        },
+    )
+    assert response.status_code == status, response.text
+    assert preparation.call_count == 1
 
 
 @pytest.fixture(name="platform")
@@ -22,6 +103,7 @@ def snapshot(platform, monkeypatch):
         {"name": "test", "components": {"database": {"type": "database"}}}
     )
     snapshot = {
+        "principal": "operator",
         "repository": "acme/service",
         "head": SHA,
         "path": "stack.yaml",
@@ -30,10 +112,15 @@ def snapshot(platform, monkeypatch):
     }
     monkeypatch.setattr("stacksmith_platform.app._snapshot", lambda *args: snapshot)
     monkeypatch.setattr(
-        "stacksmith_platform.app._draft_source", lambda *args: (snapshot, source)
+        "stacksmith_platform.app._draft_source",
+        lambda *args, **kwargs: (snapshot, source),
     )
     monkeypatch.setattr(
         "stacksmith_platform.app._config_revision", lambda *args: "configuration"
+    )
+    monkeypatch.setattr(
+        "stacksmith_platform.app._managed_layers",
+        lambda *args: [("local.yaml", "{}", "configuration")],
     )
     return snapshot
 
@@ -155,69 +242,6 @@ def test_review_uses_environment_and_returns_context(platform, snapshot, monkeyp
 
 
 @pytest.mark.parametrize("environment", [None, "dev"])
-def test_controller_review_awaits_async_adapter_and_rechecks_access(
-    platform, snapshot, monkeypatch, environment
-):
-    import asyncio
-
-    import stacksmith_platform.app as app_module
-
-    platform.settings.inspection_controller_enabled = True
-    monkeypatch.setattr(
-        "stacksmith_platform.inspection_inputs.prepare_inputs",
-        lambda request, context: context,
-    )
-    discovery = Mock(wraps=app_module._repository_discovery)
-    monkeypatch.setattr(app_module, "_repository_discovery", discovery)
-    observed = []
-
-    async def inspect(adapter, source, edits, path, token):
-        observed.append((asyncio.get_running_loop(), adapter.editor))
-        return {
-            "source": source,
-            "catalog": {"database": {"outputs": []}},
-            "associations": {"rules": []},
-        }
-
-    monkeypatch.setattr(
-        "stacksmith_platform.adapter.StacksmithAdapter.areview", inspect
-    )
-    response = platform.client.post(
-        "/api/review",
-        json={
-            "snapshot": "signed",
-            "environment": environment,
-            "components": {"database": {"type": "database"}},
-            "editor_id": "tab-1",
-            "generation": 2,
-        },
-    )
-    assert response.status_code == 200, response.text
-    assert len(observed) == 1
-    assert observed[0][1]["actor"] == "admin"
-    assert observed[0][1]["editor_id"] == "tab-1"
-    assert discovery.call_count == 2
-
-
-def test_controller_rejects_unpaired_editor_metadata(platform, snapshot, monkeypatch):
-    platform.settings.inspection_controller_enabled = True
-    monkeypatch.setattr(
-        "stacksmith_platform.inspection_inputs.prepare_inputs",
-        lambda request, context: context,
-    )
-    response = platform.client.post(
-        "/api/review",
-        json={
-            "snapshot": "signed",
-            "components": {"database": {"type": "database"}},
-            "editor_id": "tab-1",
-        },
-    )
-    assert response.status_code == 422
-    assert "both editor_id and generation" in response.json()["detail"]
-
-
-@pytest.mark.parametrize("environment", [None, "dev"])
 def test_review_reuses_preflight_discovery_but_rechecks_access_after_inspection(
     platform, snapshot, monkeypatch, environment
 ):
@@ -295,7 +319,7 @@ def test_targeted_review_preserves_filter_and_subset_synchronization(
     monkeypatch.setattr(
         UserGitHub,
         "repositories",
-        lambda self, repository=None: [
+        lambda self, repository=None, installation_id=None: [
             {
                 "name": "acme/service",
                 "github_id": "1",
@@ -430,7 +454,7 @@ def test_review_and_pr_each_submit_a_fresh_compound_job(
 ):
     monkeypatch.setattr(
         "stacksmith_platform.inspection.InspectionQueue.__init__",
-        lambda self, settings: None,
+        lambda self, settings, database=None: None,
     )
     queued = Mock(
         return_value=json.dumps(
@@ -559,26 +583,3 @@ def test_preview_worker_checks_access_and_never_supplies_credentials(
     inspection["config"] = "stale-config"
     with pytest.raises(ComposerError, match="configuration changed"):
         platform.worker._inspection_credentials(inspection)
-
-
-def test_moving_dependency_rejects_completed_review(platform, snapshot, monkeypatch):
-    from types import SimpleNamespace
-
-    from stacksmith_platform.app import _check_inspection_context
-
-    monkeypatch.setattr("stacksmith_platform.app._authoring_access", Mock())
-    monkeypatch.setattr(
-        "stacksmith_platform.inspection_inputs.prepare_inputs",
-        Mock(return_value={"_input_manifest": {"digest": "new"}}),
-    )
-    with pytest.raises(ComposerError, match="dependencies changed"):
-        _check_inspection_context(
-            SimpleNamespace(app=platform.app, state=SimpleNamespace()),
-            {
-                "repository": "acme/service",
-                "config_revision": "configuration",
-                "environment": None,
-                "_input_manifest": {"digest": "old"},
-            },
-            None,
-        )

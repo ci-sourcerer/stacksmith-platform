@@ -1,5 +1,7 @@
 {{- define "stacksmith.executionEnv" -}}
 - {name: STACKSMITH_PLATFORM_EXECUTION_ENABLED, value: "true"}
+- {name: STACKSMITH_PLATFORM_DATABASE_POOL_SIZE, value: {{ .Values.databasePoolSize | quote }}}
+- {name: STACKSMITH_PLATFORM_DATABASE_POOL_TIMEOUT, value: {{ .Values.databasePoolTimeout | quote }}}
 - {name: STACKSMITH_PLATFORM_SUPERVISION_MODE, value: kubernetes-jobs}
 - {name: STACKSMITH_PLATFORM_RUNNER, value: kubernetes}
 - {name: STACKSMITH_PLATFORM_EXECUTION_IMAGE, value: {{ .Values.executionImage | quote }}}
@@ -21,14 +23,4 @@
 - {name: STACKSMITH_PLATFORM_SUPERVISOR_MEMORY, value: {{ .Values.supervisor.memory | quote }}}
 - {name: STACKSMITH_PLATFORM_INSPECTION_WAIT_TIMEOUT, value: {{ .Values.inspectionWaitTimeout | quote }}}
 - {name: STACKSMITH_PLATFORM_INSPECTION_POLL_INTERVAL, value: {{ .Values.inspectionPollInterval | quote }}}
-- {name: STACKSMITH_PLATFORM_INSPECTION_CONTROLLER_ENABLED, value: {{ .Values.inspectionPool.enabled | quote }}}
-- {name: STACKSMITH_PLATFORM_INSPECTION_POOL_READY, value: {{ .Values.inspectionPool.ready | quote }}}
-- {name: STACKSMITH_PLATFORM_INSPECTION_POOL_ACTIVE, value: {{ .Values.inspectionPool.active | quote }}}
-- {name: STACKSMITH_PLATFORM_INSPECTION_POOL_TOTAL, value: {{ .Values.inspectionPool.total | quote }}}
-- {name: STACKSMITH_PLATFORM_INSPECTION_START_CONCURRENCY, value: {{ .Values.inspectionPool.startConcurrency | quote }}}
-- {name: STACKSMITH_PLATFORM_INSPECTION_SANDBOX_TTL, value: {{ .Values.inspectionPool.idleTtl | quote }}}
-- {name: STACKSMITH_PLATFORM_INSPECTION_RECOVERY_INTERVAL, value: {{ .Values.inspectionPool.recoveryInterval | quote }}}
-- {name: STACKSMITH_PLATFORM_INSPECTION_CACHE_TTL, value: {{ .Values.inspectionPool.cacheTtl | quote }}}
-- {name: STACKSMITH_PLATFORM_INSPECTION_CPU, value: {{ .Values.inspectionPool.cpu | quote }}}
-- {name: STACKSMITH_PLATFORM_INSPECTION_MEMORY, value: {{ .Values.inspectionPool.memory | quote }}}
 {{- end -}}

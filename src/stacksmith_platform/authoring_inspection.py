@@ -64,11 +64,7 @@ def _review(inspection):
         )
         _pin_configuration(inputs, inspection)
     with _stage(timings, "catalog"):
-        catalog = (
-            inspection.get("_cached_catalog") if cache_proof.get("static") else None
-        )
-        if catalog is None:
-            catalog = _catalog(inputs)
+        catalog = _catalog(inputs)
     with _stage(timings, "associations"):
         associations = _associations(inputs)
     return {
@@ -76,13 +72,20 @@ def _review(inspection):
         "catalog": catalog,
         "associations": associations,
         "timings": timings,
-        "_cache_stable": cache_proof.get("static", False),
+        "_editing_context": _editing_context(inputs)
+        if cache_proof.get("static")
+        else None,
     }
 
 
+def _editing_context(inputs):
+    from .editing_contexts import prepare_editing_context
+
+    return prepare_editing_context(inputs)
+
+
 def _pin_configuration(inputs, inspection):
-    manifest = (inspection.get("context") or {}).get("_input_manifest")
-    if not manifest:
+    if not (manifest := (inspection.get("context") or {}).get("_input_manifest")):
         return
     from ruamel.yaml import YAML
     from stacksmith.remote import resolve_references

@@ -266,7 +266,7 @@ def test_composer_write_requires_repository_wide_provisioner(
     monkeypatch.setattr(
         app_module,
         "_snapshot",
-        lambda *args: {
+        lambda *args, **kwargs: {
             "repository": "acme/service",
             "source": "name: original\ncomponents: {}\n",
             "path": "stack.yaml",
@@ -293,7 +293,7 @@ def test_viewer_can_inspect_original_source_but_cannot_submit_changes(
     monkeypatch.setattr(
         app_module,
         "_snapshot",
-        lambda *args: {
+        lambda *args, **kwargs: {
             "repository": "acme/service",
             "source": "name: original\ncomponents: {}\n",
             "path": "stack.yaml",
@@ -333,7 +333,7 @@ def test_viewer_changes_are_denied_before_authoring_executes(platform, monkeypat
     monkeypatch.setattr(
         app_module,
         "_snapshot",
-        lambda *args: {
+        lambda *args, **kwargs: {
             "repository": "acme/service",
             "source": "name: original\ncomponents: {}\n",
             "path": "stack.yaml",

@@ -2,7 +2,7 @@ import json
 
 import pytest
 
-from scripts.benchmark_inspections import Editor
+from scripts.benchmark_editors import Editor
 
 
 def test_capacity_runner_rejects_stale_source_and_missing_connections():

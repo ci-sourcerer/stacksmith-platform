@@ -23,7 +23,7 @@ spec:
           imagePullPolicy: {{ .Values.imagePullPolicy }}
           env:
             - name: API_UPSTREAM
-              value: "http://{{ .Release.Name }}-api.{{ .Release.Namespace }}.svc:8000"
+              value: "http://{{ .Release.Name }}-api.{{ .Release.Namespace }}.svc.{{ .Values.clusterDomain }}:8000"
           securityContext:
             allowPrivilegeEscalation: false
             readOnlyRootFilesystem: true

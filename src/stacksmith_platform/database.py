@@ -3,6 +3,7 @@ import hashlib
 import time
 from contextlib import contextmanager
 from pathlib import Path
+from threading import Lock
 from typing import Any
 
 from cryptography.fernet import Fernet
@@ -19,13 +20,23 @@ from sqlalchemy import (
     create_engine,
     event,
 )
+from sqlalchemy.exc import TimeoutError as PoolTimeoutError
 from sqlalchemy.pool import StaticPool
+
+from .metrics import TimingSamples
 
 metadata = MetaData()
 
 
 def _table(name, *columns):
     return Table(name, metadata, Column("id", String, primary_key=True), *columns)
+
+
+prepared_contexts = _table(
+    "prepared_contexts",
+    Column("payload", Text, nullable=False),
+    Column("expires", Float, nullable=False, index=True),
+)
 
 
 sessions = _table(
@@ -147,31 +158,6 @@ scheduler_health = _table(
     "scheduler_health", Column("completed", Float), Column("error", Text)
 )
 
-inspection_editors = _table(
-    "inspection_editors",
-    Column("generation", Integer, nullable=False),
-    Column("updated", Float, nullable=False),
-)
-inspection_sandboxes = _table(
-    "inspection_sandboxes",
-    Column("image", String, nullable=False),
-    Column("status", String, nullable=False, index=True),
-    Column("token_digest", String, nullable=False),
-    Column("token", Text, nullable=False),
-    Column("created", Float, nullable=False),
-    Column("expires", Float, nullable=False),
-    Column("owner", String),
-    Column("lease", Float),
-    Column("run", String, unique=True),
-    Column("assignment", Text),
-)
-inspection_cache = _table(
-    "inspection_cache",
-    Column("key", String, nullable=False),
-    Column("encryption_key", Text, nullable=False),
-    Column("expires", Float, nullable=False, index=True),
-)
-
 
 class Database:
     """Provide transactional storage and encryption for platform records.
@@ -179,15 +165,26 @@ class Database:
     Args:
         url: SQLAlchemy PostgreSQL URL, or SQLite URL for local authoring/tests.
         secret: Deployment-managed encryption secret.
+        pool_size: Maximum simultaneous query connections in this process.
+        pool_timeout: Maximum seconds waiting for a query connection.
     """
 
-    def __init__(self, url: str, secret: str):
+    def __init__(self, url: str, secret: str, pool_size=5, pool_timeout=5):
+        self._checkout = TimingSamples()
+        self._metrics_lock = Lock()
+        self._checkout_timeouts = 0
+        self._peak_in_use = 0
         self.engine = create_engine(
             url,
             **(
                 {"poolclass": StaticPool, "connect_args": {"check_same_thread": False}}
                 if url == "sqlite://"
-                else {}
+                else {
+                    "pool_size": pool_size,
+                    "max_overflow": 0,
+                    "pool_timeout": pool_timeout,
+                    "pool_pre_ping": True,
+                }
             ),
         )
         self.cipher = Fernet(
@@ -195,6 +192,49 @@ class Database:
         )
         if self.engine.dialect.name == "sqlite":
             event.listen(self.engine, "connect", _sqlite_foreign_keys)
+        else:
+            event.listen(self.engine, "checkout", self._checked_out)
+
+    def _checked_out(self, _connection, _record, _proxy):
+        with self._metrics_lock:
+            self._peak_in_use = max(self._peak_in_use, self.engine.pool.checkedout())
+
+    def metrics(self):
+        """Report query-pool use, checkout waits, and timeouts without credentials.
+
+        Returns:
+            Bounded acquisition samples and current PostgreSQL connection gauges.
+        """
+        with self._metrics_lock:
+            return {
+                "capacity": self.engine.pool.size()
+                if self.engine.dialect.name == "postgresql"
+                else None,
+                "in_use": self.engine.pool.checkedout()
+                if self.engine.dialect.name == "postgresql"
+                else None,
+                "peak_in_use": self._peak_in_use,
+                "checkout_timeouts": self._checkout_timeouts,
+                "checkout": self._checkout.snapshot(),
+            }
+
+    @classmethod
+    def from_settings(cls, settings, *, pool_size=None):
+        """Create a bounded query pool from deployment settings.
+
+        Args:
+            settings: Database URL, encryption secret, and query pool limits.
+            pool_size: Optional smaller limit for a sequential worker process.
+
+        Returns:
+            One process-owned database pool.
+        """
+        return cls(
+            settings.database_url,
+            settings.secret_key,
+            settings.database_pool_size if pool_size is None else pool_size,
+            settings.database_pool_timeout,
+        )
 
     def initialize(self) -> None:
         """Upgrade the database to the latest packaged schema revision.
@@ -218,17 +258,19 @@ class Database:
         Yields:
             A database connection committed on success and rolled back on error.
         """
-        with self.engine.begin() as connection:
+        started = time.monotonic()
+        try:
+            connection = self.engine.connect()
+        except PoolTimeoutError:
+            self._checkout.observe(time.monotonic() - started)
+            with self._metrics_lock:
+                self._checkout_timeouts += 1
+            raise
+        self._checkout.observe(time.monotonic() - started)
+        with connection, connection.begin():
             if self.engine.dialect.name == "sqlite":
                 connection.exec_driver_sql("BEGIN IMMEDIATE")
-            try:
-                yield connection
-            finally:
-                notifications = connection.info.pop("inspection_notifications", ())
-        if notifications:
-            from .inspection_notifications import publish_local
-
-            publish_local(str(self.engine.url), notifications)
+            yield connection
 
     def encrypt(self, value: str) -> str:
         """Encrypt a secret value.

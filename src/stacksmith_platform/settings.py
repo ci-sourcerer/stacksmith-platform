@@ -5,6 +5,7 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
+from sqlalchemy.engine import make_url
 
 
 class SourceDefinition(BaseModel):
@@ -32,6 +33,9 @@ class Settings(BaseSettings):
     execution_callback_url: str = ""
     database: Path = Path(".data/platform.sqlite3")
     database_url: str = ""
+    database_listener_url: str = ""
+    database_pool_size: int = Field(default=5, gt=0)
+    database_pool_timeout: float = Field(default=5, gt=0)
     execution_enabled: bool = False
     admin_logins: list[str] = []
     github_app_id: str = ""
@@ -55,18 +59,7 @@ class Settings(BaseSettings):
     supervisor_memory: str = "1Gi"
     inspection_wait_timeout: int | None = Field(default=None, ge=1)
     inspection_concurrency: int = Field(default=4, ge=1)
-    inspection_poll_interval: float = Field(default=0.25, gt=0, allow_inf_nan=False)
-    inspection_controller_enabled: bool = False
-    inspection_pool_ready: int = Field(default=15, ge=0)
-    inspection_pool_active: int = Field(default=15, ge=1)
-    inspection_pool_total: int = Field(default=30, ge=1)
-    inspection_start_concurrency: int = Field(default=8, ge=1)
-    inspection_sandbox_ttl: int = Field(default=900, ge=30)
-    inspection_recovery_interval: float = Field(default=30, gt=0, allow_inf_nan=False)
-    inspection_memory: str = "512Mi"
-    inspection_docker_memory: str = "512m"
-    inspection_cpu: str = "1"
-    inspection_cache_ttl: int = Field(default=3600, ge=1)
+    inspection_poll_interval: float = Field(default=2, gt=0, allow_inf_nan=False)
     execution_namespace: str = "stacksmith-runs"
     execution_service_account: str = "stacksmith-execution"
     execution_cpu: str = "1"
@@ -104,17 +97,14 @@ class Settings(BaseSettings):
 
     @model_validator(mode="after")
     def _validate_github_settings(self):
-        if self.inspection_controller_enabled and (
-            not self.execution_enabled or self.runner not in {"docker", "kubernetes"}
+        if self.database_listener_url and (
+            not self.database_listener_url.startswith("postgresql+psycopg://")
+            or not self.database_url.startswith("postgresql+psycopg://")
+            or make_url(self.database_listener_url).database
+            != make_url(self.database_url).database
         ):
             raise ValueError(
-                "Inspection pooling requires enabled Docker or Kubernetes execution"
-            )
-        if self.inspection_pool_total < max(
-            self.inspection_pool_ready, self.inspection_pool_active
-        ):
-            raise ValueError(
-                "Inspection pool total must cover the ready and active limits"
+                "database_listener_url must address the same PostgreSQL database through a direct or session-pooled endpoint"
             )
         protected_run_names = {
             "HOME",

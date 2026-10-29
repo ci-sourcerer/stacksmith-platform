@@ -97,7 +97,7 @@ def _reconciler(settings, transport):
         )
     reconciler = RunReconciler(
         settings,
-        Database(settings.database_url, settings.secret_key),
+        Database.from_settings(settings, pool_size=1),
         execution_driver(settings),
         artifact_storage(settings),
         GitHubProvider(settings, transport),

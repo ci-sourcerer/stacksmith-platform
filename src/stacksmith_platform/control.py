@@ -413,6 +413,7 @@ def _repository_access(
     repository,
     environment="*",
     permission="view",
+    *,
     github_checked=False,
 ):
     if not re.fullmatch(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+", repository):
@@ -2822,67 +2823,6 @@ def claim_execution(request: Request, run_id: str):
         )
         audit(connection, "execution", "phase.claimed", run_id, phase=run["phase"])
     return {"claimed": True}
-
-
-@execution_router.post("/executions/{run_id}/inspection-result")
-def inspection_result_ready(request: Request, run_id: str):
-    """Signal an uploaded encrypted inspection result without trusting its contents.
-
-    Args:
-        request: Request carrying the existing claimed phase capability.
-        run_id: Inspection run identifier.
-
-    Returns:
-        An idempotent acknowledgement. Controllers reread and verify the artifact.
-
-    Raises:
-        ComposerError: The capability is expired, unclaimed, or outside its inspection.
-    """
-    from .inspection_notifications import notify
-
-    _enabled(request)
-    with request.app.state.database.transaction() as connection:
-        run = _inspection_completion_run(connection, request, run_id)
-        if run["status"] not in {"running", "cancelling"}:
-            return {"accepted": False}
-        if not run["execution"].get("result_ready"):
-            connection.execute(
-                runs.update()
-                .where(runs.c.id == run_id)
-                .values(execution={**run["execution"], "result_ready": True})
-            )
-            notify(connection, run_id)
-    return {"accepted": True}
-
-
-def _inspection_completion_run(connection, request, run_id):
-    from .database import phase_claims
-
-    run = (
-        connection.execute(runs.select().where(runs.c.id == run_id).with_for_update())
-        .mappings()
-        .first()
-    )
-    claim = row(connection, phase_claims, f"{run_id}:{run['phase']}") if run else None
-    if (
-        not run
-        or run["action"] != "inspection"
-        or not run["spec"].get("inspection_controller")
-        or run["expires"] <= time.time()
-        or not run["execution"]
-        or not claim
-        or claim["fence"] != run["fence"]
-        or not hmac.compare_digest(
-            hashlib.sha256(
-                request.headers.get("authorization", "")
-                .removeprefix("Bearer ")
-                .encode()
-            ).hexdigest(),
-            run["execution"]["claim_digest"],
-        )
-    ):
-        raise ComposerError("Invalid inspection completion capability.", 403)
-    return run
 
 
 @execution_router.post("/executions/{run_id}/credentials")

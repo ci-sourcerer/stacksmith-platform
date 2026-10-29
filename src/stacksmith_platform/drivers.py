@@ -1,20 +1,10 @@
-import hashlib
-import time
-from contextlib import closing
-
 import docker
 from docker.errors import NotFound
-from kubernetes import client, config, watch
+from kubernetes import client, config
 from kubernetes.client.exceptions import ApiException
 
 from .certificates import CA_BUNDLE_MOUNT_PATH
 from .integrations import ExecutionDriver
-
-
-def _inspection_pool(settings, scope):
-    return hashlib.sha256(
-        f"{settings.execution_callback_url or settings.public_url}|{scope}".encode()
-    ).hexdigest()[:16]
 
 
 class DockerDriver(ExecutionDriver):
@@ -66,31 +56,10 @@ class DockerDriver(ExecutionDriver):
             name=name,
             detach=True,
             environment=environment,
-            labels={
-                "stacksmith.platform/execution": name,
-                **(
-                    {
-                        "stacksmith.platform/inspection-sandbox": name,
-                        "stacksmith.platform/inspection-pool": _inspection_pool(
-                            self.settings, self.settings.docker_network
-                        ),
-                    }
-                    if "PLATFORM_SANDBOX_URL" in environment
-                    else {}
-                ),
-            },
+            labels={"stacksmith.platform/execution": name},
             network=self.settings.docker_network,
-            mem_limit=self.settings.inspection_docker_memory
-            if "PLATFORM_SANDBOX_URL" in environment
-            else self.settings.docker_memory,
-            nano_cpus=int(
-                float(
-                    self.settings.inspection_cpu
-                    if "PLATFORM_SANDBOX_URL" in environment
-                    else self.settings.execution_cpu
-                )
-                * 1_000_000_000
-            ),
+            mem_limit=self.settings.docker_memory,
+            nano_cpus=int(float(self.settings.execution_cpu) * 1_000_000_000),
             pids_limit=512,
             cap_drop=["ALL"],
             security_opt=["no-new-privileges:true"],
@@ -116,56 +85,6 @@ class DockerDriver(ExecutionDriver):
                 type="json-file", config={"max-size": "1m", "max-file": "2"}
             ),
         )
-
-    def inspection_events(self):
-        """Stream inspection container events for a bounded reconnect window.
-
-        Yields:
-            Stable inspection sandbox names.
-
-        Raises:
-            docker.errors.APIError: The Docker event connection fails.
-        """
-        with closing(
-            self.client.events(
-                decode=True,
-                since=int(time.time()) - 30,
-                until=int(time.time()) + 30,
-                filters={
-                    "label": [
-                        "stacksmith.platform/inspection-sandbox",
-                        f"stacksmith.platform/inspection-pool={_inspection_pool(self.settings, self.settings.docker_network)}",
-                    ],
-                    "event": ["die", "destroy", "oom"],
-                },
-            )
-        ) as events:
-            for event in events:
-                if event.get("Actor", {}).get("Attributes", {}).get("name"):
-                    yield event["Actor"]["Attributes"]["name"]
-
-    def inspection_resources(self):
-        """List this deployment's inspection sandboxes for orphan recovery.
-
-        Returns:
-            Names of running or exited inspection containers on the execution network.
-
-        Raises:
-            docker.errors.APIError: Docker cannot list the resources.
-        """
-        return [
-            container.name
-            for container in self.client.containers.list(
-                all=True,
-                filters={
-                    "label": [
-                        "stacksmith.platform/inspection-sandbox",
-                        f"stacksmith.platform/inspection-pool={_inspection_pool(self.settings, self.settings.docker_network)}",
-                    ],
-                    "network": self.settings.docker_network,
-                },
-            )
-        ]
 
     def logs(self, name):
         """Collect bounded live execution output.
@@ -212,7 +131,6 @@ class KubernetesDriver(ExecutionDriver):
         config.load_incluster_config()
         self.batch = client.BatchV1Api()
         self.core = client.CoreV1Api()
-        self._inspection_version = None
 
     def inspect(self, name):
         """Inspect a phase Job.
@@ -254,25 +172,7 @@ class KubernetesDriver(ExecutionDriver):
             {
                 "apiVersion": "batch/v1",
                 "kind": "Job",
-                "metadata": {
-                    "name": name,
-                    "labels": {
-                        **(
-                            {
-                                "stacksmith.platform/inspection-pool": _inspection_pool(
-                                    self.settings, self.settings.execution_namespace
-                                )
-                            }
-                            if "PLATFORM_SANDBOX_URL" in environment
-                            else {}
-                        ),
-                        "app": (
-                            "stacksmith-inspection"
-                            if "PLATFORM_SANDBOX_URL" in environment
-                            else "stacksmith-execution"
-                        ),
-                    },
-                },
+                "metadata": {"name": name, "labels": {"app": "stacksmith-execution"}},
                 "spec": {
                     "backoffLimit": 0,
                     "activeDeadlineSeconds": timeout,
@@ -308,12 +208,8 @@ class KubernetesDriver(ExecutionDriver):
                                     "resources": {
                                         "requests": {"cpu": "100m", "memory": "256Mi"},
                                         "limits": {
-                                            "cpu": self.settings.inspection_cpu
-                                            if "PLATFORM_SANDBOX_URL" in environment
-                                            else self.settings.execution_cpu,
-                                            "memory": self.settings.inspection_memory
-                                            if "PLATFORM_SANDBOX_URL" in environment
-                                            else self.settings.execution_memory,
+                                            "cpu": self.settings.execution_cpu,
+                                            "memory": self.settings.execution_memory,
                                         },
                                     },
                                     "securityContext": {
@@ -336,61 +232,6 @@ class KubernetesDriver(ExecutionDriver):
                 },
             },
         )
-
-    def inspection_events(self):
-        """List then watch inspection Jobs with reconnectable resource versions.
-
-        Yields:
-            Stable inspection sandbox names.
-
-        Raises:
-            ApiException: Kubernetes is unavailable or the watch expires.
-        """
-        if self._inspection_version is None:
-            listing = self.batch.list_namespaced_job(
-                self.settings.execution_namespace,
-                label_selector=self._inspection_selector(),
-            )
-            self._inspection_version = listing.metadata.resource_version
-            for job in listing.items:
-                yield job.metadata.name
-        stream = watch.Watch()
-        try:
-            for event in stream.stream(
-                self.batch.list_namespaced_job,
-                self.settings.execution_namespace,
-                label_selector=self._inspection_selector(),
-                resource_version=self._inspection_version,
-                timeout_seconds=30,
-            ):
-                self._inspection_version = event["object"].metadata.resource_version
-                yield event["object"].metadata.name
-        except ApiException as exc:
-            if exc.status == 410:
-                self._inspection_version = None
-            raise
-        finally:
-            stream.stop()
-
-    def inspection_resources(self):
-        """List namespaced inspection Jobs for orphan recovery.
-
-        Returns:
-            Inspection Job names in this deployment's execution namespace.
-
-        Raises:
-            ApiException: Kubernetes cannot list the Jobs.
-        """
-        return [
-            job.metadata.name
-            for job in self.batch.list_namespaced_job(
-                self.settings.execution_namespace,
-                label_selector=self._inspection_selector(),
-            ).items
-        ]
-
-    def _inspection_selector(self):
-        return f"app=stacksmith-inspection,stacksmith.platform/inspection-pool={_inspection_pool(self.settings, self.settings.execution_namespace)}"
 
     def logs(self, name):
         """Read a bounded execution pod log tail.

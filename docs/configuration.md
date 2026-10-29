@@ -37,12 +37,6 @@ GitHub mode requires a stable `SECRET_KEY` of at least 32 characters. The callba
 | `SUPERVISION_MODE` | Persistent `worker` or temporary `kubernetes-jobs` supervision | `worker`; Helm selects `kubernetes-jobs` |
 | `WORKER_ID` | Optional stable supervisor identifier | Container hostname for PID 1; otherwise random per worker start |
 | `INSPECTION_CONCURRENCY` | Maximum concurrent isolated inspections per Compose worker; positive integer | `4` |
-| `INSPECTION_CONTROLLER_ENABLED` | Opt in to the shared notification-driven inspection controller; see [rollout and acceptance](inspection-controller.md) | `false` |
-| `INSPECTION_POOL_READY` / `INSPECTION_POOL_ACTIVE` / `INSPECTION_POOL_TOTAL` | Global idle-ready, active, and total sandbox caps, including starting and retiring sandboxes | `15` / `15` / `30` |
-| `INSPECTION_START_CONCURRENCY` | Maximum parallel sandbox starts per controller | `8` |
-| `INSPECTION_SANDBOX_TTL` / `INSPECTION_RECOVERY_INTERVAL` | Idle sandbox lifetime and recovery scan in seconds | `900` / `30` |
-| `INSPECTION_CPU` / `INSPECTION_MEMORY` / `INSPECTION_DOCKER_MEMORY` | Inspection CPU limit and Kubernetes/Docker memory limits | `1` / `512Mi` / `512m` |
-| `INSPECTION_CACHE_TTL` | Encrypted immutable-input cache lifetime in seconds | `3600` |
 | `PHASE_TIMEOUT` | Execution deadline in seconds | `3600` |
 | `APPROVAL_TTL` | Approval/private-handoff lifetime, at most 24 hours | `86400` |
 | `ARTIFACT_RETENTION` | Review-artifact lifetime in seconds | `2592000` |

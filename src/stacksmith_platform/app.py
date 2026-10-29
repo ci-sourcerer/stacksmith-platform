@@ -1,18 +1,19 @@
+import asyncio
 import hashlib
 import json
 import logging
 import re
 import secrets
-from asyncio import get_running_loop, to_thread
-from concurrent.futures import ThreadPoolExecutor
+from asyncio import to_thread
 from contextlib import asynccontextmanager
+from functools import partial
 from pathlib import Path
 from time import perf_counter
 from typing import Annotated, Any, Literal
 from urllib.parse import urlencode, urlparse
 
 from fastapi import APIRouter, Depends, FastAPI, Request
-from fastapi.responses import JSONResponse, RedirectResponse
+from fastapi.responses import JSONResponse, RedirectResponse, StreamingResponse
 from itsdangerous import BadSignature, SignatureExpired, URLSafeTimedSerializer
 from pydantic import BaseModel, Field
 from starlette.background import BackgroundTasks
@@ -23,13 +24,17 @@ from .adapter import StacksmithAdapter
 from .certificates import CA_BUNDLE_MOUNT_PATH, configure_ca_bundle
 from .component_rename import rename_components, root_rename_edits
 from .configuration import configuration_policy, effective_config
+from .configuration_events import ConfigurationEvents
 from .database import environments, row
 from .database import repositories as registered_repositories
 from .documents import _source_edits, load_document, source_diff
+from .editing_contexts import EditingContexts, context_key
 from .errors import ComposerError
 from .github import GitHubClient
 from .github_transport import GitHubTransport
 from .graph import extract_graph, inspect_graph, validate_root_references
+from .inspection_inputs import prepare_inputs
+from .metrics import TimingSamples
 from .platform import platform_summary
 from .repositories import synchronize, synchronize_user
 from .repository_filter import filtered, get_filter
@@ -88,8 +93,6 @@ class Draft(InspectionContextInput):
     positions: dict[str, DiagramPosition] = Field(default_factory=dict, max_length=200)
     routes: list[DiagramRoute] = Field(default_factory=list, max_length=500)
     renames: list[ComponentRename] = Field(default_factory=list, max_length=100)
-    editor_id: str | None = Field(default=None, pattern=r"^[A-Za-z0-9_-]{1,100}$")
-    generation: int | None = Field(default=None, ge=1)
 
 
 class RenameDraft(Draft):
@@ -178,7 +181,12 @@ def _configuration_references(request, repository=None):
 def _adapter(request, repository=None, context=None):
     if not request.app.state.settings.execution_enabled:
         return request.app.state.adapter
-    references = _configuration_references(request, repository)
+    prepared = getattr(request.state, "inspection_layers", None)
+    references = (
+        [reference for reference, _, _ in prepared[1]]
+        if context and prepared and prepared[0] == repository
+        else _configuration_references(request, repository)
+    )
     return StacksmithAdapter(
         request.app.state.settings.model_copy(
             update={
@@ -188,6 +196,7 @@ def _adapter(request, repository=None, context=None):
             }
         ),
         context=context,
+        database=request.app.state.database,
     )
 
 
@@ -252,16 +261,13 @@ def _check_inspection_context(request, context, adapter):
         raise ComposerError(
             "Platform configuration changed. Reopen the stack before reviewing.", 409
         )
-    if context.get("_input_manifest"):
-        from .inspection_inputs import prepare_inputs
-
-        if (
-            prepare_inputs(request, context)["_input_manifest"]["digest"]
-            != context["_input_manifest"]["digest"]
-        ):
-            raise ComposerError(
-                "Inspection dependencies changed. Review the draft again.", 409
-            )
+    if context.get("_input_manifest") and (
+        prepare_inputs(request, context)["_input_manifest"]["digest"]
+        != context["_input_manifest"]["digest"]
+    ):
+        raise ComposerError(
+            "Inspection dependencies changed. Review the draft again.", 409
+        )
     if context["environment"]:
         _check_environment_state(request, context, adapter, _principal(request))
 
@@ -357,7 +363,7 @@ def _open_snapshot(request: Request, source: str, **metadata) -> dict[str, Any]:
                 in access_for(
                     connection,
                     request.app.state.settings,
-                    _principal(request),
+                    snapshot["principal"],
                     metadata["repository"],
                 )["capabilities"]
             )
@@ -388,8 +394,12 @@ def _snapshot(
     return snapshot
 
 
-def _draft_source(request: Request, draft: Draft) -> tuple[dict[str, Any], str]:
-    snapshot, edits = _draft_edits(request, draft)
+def _draft_source(
+    request: Request, draft: Draft, *, check_configuration=True
+) -> tuple[dict[str, Any], str]:
+    snapshot, edits = _draft_edits(
+        request, draft, check_configuration=check_configuration
+    )
     source = request.app.state.adapter.author(
         snapshot["source"], edits, snapshot["path"]
     )["source"]
@@ -397,8 +407,12 @@ def _draft_source(request: Request, draft: Draft) -> tuple[dict[str, Any], str]:
     return snapshot, source
 
 
-def _draft_edits(request, draft, check_configuration=True):
-    snapshot = _snapshot(request, draft.snapshot, check_configuration)
+def _draft_edits(request, draft, *, check_configuration=True):
+    snapshot = (
+        _snapshot(request, draft.snapshot)
+        if check_configuration
+        else _snapshot(request, draft.snapshot, check_configuration=False)
+    )
     if snapshot.get("repository") and _draft_modified(snapshot, draft):
         _authoring_write_access(request, snapshot["repository"])
     return snapshot, _source_edits(
@@ -449,22 +463,28 @@ def _draft_modified(snapshot, draft):
     )
 
 
-def _review(request: Request, draft: Draft) -> tuple[dict[str, Any], dict[str, Any]]:
+def _review(
+    request: Request, draft: Draft, *, fresh=False
+) -> tuple[dict[str, Any], dict[str, Any]]:
     started = perf_counter()
     timings = {}
     snapshot, edits = _draft_edits(request, draft)
-    context = _inspection_context(request, snapshot, draft.environment)
+    context = prepare_inputs(
+        request, _inspection_context(request, snapshot, draft.environment)
+    )
     adapter = _adapter(request, snapshot.get("repository"), context)
     timings["preflight"] = perf_counter() - started
     stage_started = perf_counter()
-    result = adapter.review(
-        snapshot["source"], edits, snapshot["path"], _github_token(request)
+    result = request.app.state.editing_contexts.review(
+        None
+        if fresh
+        else context_key(snapshot, context, request.app.state.settings.execution_image),
+        snapshot["source"],
+        edits,
+        snapshot["path"],
+        partial(_prepare_review, request, snapshot, edits, context, adapter),
     )
     timings["inspection"] = perf_counter() - stage_started
-    return _finish_review(request, snapshot, context, adapter, result, started, timings)
-
-
-def _finish_review(request, snapshot, context, adapter, result, started, timings):
     stage_started = perf_counter()
     source = result["source"]
     _check_draft_source(request, snapshot, source)
@@ -472,7 +492,8 @@ def _finish_review(request, snapshot, context, adapter, result, started, timings
     associations = result["associations"]
     document = associations.pop("_document", None) or load_document(source)
     validate_root_references(document, catalog)
-    _check_inspection_context(request, context, adapter)
+    if not result.pop("_context_checked", False):
+        _check_inspection_context(request, context, adapter)
     timings["completion"] = perf_counter() - stage_started
     stage_started = perf_counter()
     result = {
@@ -489,12 +510,22 @@ def _finish_review(request, snapshot, context, adapter, result, started, timings
         "context": _context_metadata(context),
     }
     timings["graph"] = perf_counter() - stage_started
+    request.app.state.review_timings.observe(perf_counter() - started)
     logging.getLogger(__name__).info(
         "Review completed: total_seconds=%.3f stage_seconds=%s",
         perf_counter() - started,
         timings,
     )
     return snapshot, result
+
+
+def _prepare_review(request, snapshot, edits, context, adapter):
+    result = adapter.review(
+        snapshot["source"], edits, snapshot["path"], _github_token(request)
+    )
+    _check_inspection_context(request, context, adapter)
+    result["_context_checked"] = True
+    return result
 
 
 @platform_router.get("/session")
@@ -507,8 +538,119 @@ def session_info(request: Request) -> dict[str, Any]:
         "mode": "github" if request.app.state.settings.github_enabled else "demo",
         "login": session[0] if session else None,
         "execution_enabled": request.app.state.settings.execution_enabled,
-        "inspection_controller_enabled": request.app.state.settings.inspection_controller_enabled,
     }
+
+
+@composer_router.get("/editor-status")
+def editor_status(request: Request):
+    """Report preparation, latency, notification, and database metrics to admins.
+
+    Args:
+        request: Authenticated platform administrator request.
+
+    Returns:
+        Operational counters without sources, principal identities, or credentials.
+
+    Raises:
+        ComposerError: The caller is not an administrator.
+    """
+    from sqlalchemy import func, text
+
+    from .access import is_admin
+    from .database import runs
+
+    if not is_admin(request.app.state.settings, _principal(request)):
+        raise ComposerError("A platform administrator session is required.", 403)
+    with request.app.state.database.transaction() as connection:
+        inspections = dict(
+            connection.execute(
+                runs.select()
+                .with_only_columns(runs.c.status, func.count())
+                .where(runs.c.action == "inspection")
+                .group_by(runs.c.status)
+            ).all()
+        )
+        database = (
+            dict(
+                connection.execute(
+                    text(
+                        "SELECT numbackends AS connections, current_setting('max_connections')::int AS max_connections FROM pg_stat_database WHERE datname=current_database()"
+                    )
+                )
+                .mappings()
+                .one()
+            )
+            if connection.dialect.name == "postgresql"
+            else {}
+        )
+    return {
+        "contexts": request.app.state.editing_contexts.metrics(),
+        "notifications": request.app.state.configuration_events.metrics(),
+        "database_pool": request.app.state.database.metrics(),
+        "database": database,
+        "inspections": inspections,
+        "review_backend_latency": request.app.state.review_timings.snapshot(),
+        "github_requests": request.app.state.github_transport.request_count,
+        "github_conditional_hits": request.app.state.github_transport.conditional_hits,
+        "github_counter_id": request.app.state.github_transport.counter_id,
+    }
+
+
+@composer_router.get("/configuration-events", dependencies=[Depends(_identity)])
+async def configuration_events(request: Request):
+    """Stream configuration wakeups without configuration or credentials.
+
+    Args:
+        request: Authenticated editor request.
+
+    Returns:
+        A reconnectable stream; clients fetch authorized state on every wakeup.
+    """
+    return StreamingResponse(
+        _configuration_stream(request),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-store", "X-Accel-Buffering": "no"},
+    )
+
+
+async def _configuration_stream(request):
+    with request.app.state.configuration_events.subscribe() as changed:
+        # Reconnecting clients revalidate changes missed while disconnected.
+        yield "event: configuration\ndata: {}\n\n"
+        while not await request.is_disconnected():
+            try:
+                await asyncio.wait_for(changed.wait(), 15)
+            except TimeoutError:
+                yield ": keepalive\n\n"
+            else:
+                changed.clear()
+                yield "event: configuration\ndata: {}\n\n"
+
+
+@composer_router.post("/refresh-snapshot")
+def refresh_snapshot(request: Request, body: InspectionContextInput):
+    """Refresh configuration identity while preserving a draft's original base.
+
+    Args:
+        request: Authenticated editor request.
+        body: Signed original snapshot and selected environment.
+
+    Returns:
+        A current signed snapshot; authored edits remain in the editor.
+
+    Raises:
+        ComposerError: The snapshot or current repository access is invalid.
+    """
+    snapshot = _snapshot(request, body.snapshot, check_configuration=False)
+    return _open_snapshot(
+        request,
+        snapshot["source"],
+        **{
+            key: value
+            for key, value in snapshot.items()
+            if key not in {"source", "principal", "config_revision"}
+        },
+    )
 
 
 @platform_router.get("/health")
@@ -517,44 +659,14 @@ def health() -> dict[str, str]:
     return {"status": "ok"}
 
 
-@platform_router.get("/inspection-status", dependencies=[Depends(_identity)])
-def inspection_pool_status(request: Request) -> dict[str, Any]:
-    """Read administrator-only inspection capacity and queue gauges.
-
-    Args:
-        request: Authenticated platform administrator request.
-
-    Returns:
-        Aggregate controller and sandbox metrics.
-
-    Raises:
-        ComposerError: The caller cannot administer the platform.
-    """
-    from .control import _administrator
-    from .control import _identity as identity
-    from .inspection_health import status
-
-    _administrator(request, identity(request))
-    return {
-        **status(request.app.state.database, request.app.state.settings),
-        "github_requests": request.app.state.github_transport.request_count,
-        "github_conditional_hits": request.app.state.github_transport.conditional_hits,
-        "github_counter_id": request.app.state.github_transport.counter_id,
-    }
-
-
 @platform_router.get("/catalog", dependencies=[Depends(_identity)])
-async def catalog(request: Request) -> dict[str, Any]:
+def catalog(request: Request) -> dict[str, Any]:
     """Return public component metadata from the separate Stacksmith installation."""
-    adapter = await to_thread(_adapter, request)
-    token = await to_thread(_github_token, request)
-    if request.app.state.settings.inspection_controller_enabled:
-        return await adapter.acatalog(token)
-    return await to_thread(adapter.catalog, token)
+    return _adapter(request).catalog(_github_token(request))
 
 
 @composer_router.post("/catalog")
-async def environment_catalog(
+def environment_catalog(
     request: Request, body: InspectionContextInput
 ) -> dict[str, Any]:
     """Inspect component metadata for a signed stack's inspection context.
@@ -569,25 +681,13 @@ async def environment_catalog(
     Raises:
         ComposerError: The snapshot, environment, access, or inspection is invalid.
     """
-    context, adapter, token = await to_thread(_prepare_catalog, request, body)
-    result = (
-        await adapter.acatalog(token)
-        if request.app.state.settings.inspection_controller_enabled
-        else await to_thread(adapter.catalog, token)
-    )
-    await to_thread(_check_inspection_context, request, context, adapter)
-    return {"catalog": result, "context": _context_metadata(context)}
-
-
-def _prepare_catalog(request, body):
     context = _inspection_context(
         request, _snapshot(request, body.snapshot), body.environment
     )
-    return (
-        context,
-        _adapter(request, context["repository"] if context else None, context),
-        _github_token(request),
-    )
+    adapter = _adapter(request, context["repository"] if context else None, context)
+    result = adapter.catalog(_github_token(request))
+    _check_inspection_context(request, context, adapter)
+    return {"catalog": result, "context": _context_metadata(context)}
 
 
 @composer_router.get("/inspection-targets")
@@ -708,17 +808,13 @@ def rename_component(request: Request, draft: RenameDraft) -> dict[str, Any]:
 
 
 @composer_router.post("/review")
-async def review(request: Request, draft: Draft) -> dict[str, Any]:
+def review(request: Request, draft: Draft) -> dict[str, Any]:
     """Inspect a draft and return the exact authored source and diff for review."""
-    if request.app.state.settings.inspection_controller_enabled:
-        from .async_inspection import review as inspect_review
-
-        return (await inspect_review(request, draft))[1]
-    return (await to_thread(_review, request, draft))[1]
+    return _review(request, draft)[1]
 
 
 @composer_router.post("/source")
-async def draft_source(request: Request, draft: Draft) -> dict[str, str]:
+def draft_source(request: Request, draft: Draft) -> dict[str, str]:
     """Render authored changes without running Stacksmith inspection.
 
     Args:
@@ -731,12 +827,7 @@ async def draft_source(request: Request, draft: Draft) -> dict[str, str]:
     Raises:
         ComposerError: If the snapshot or authored document is invalid.
     """
-    if request.app.state.settings.inspection_controller_enabled:
-        from .async_inspection import source as inspect_source
-
-        snapshot, source = await inspect_source(request, draft)
-    else:
-        snapshot, source = await to_thread(_draft_source, request, draft)
+    snapshot, source = _draft_source(request, draft, check_configuration=False)
     return {
         "source": source,
         "diff": source_diff(snapshot["source"], source, snapshot["path"]),
@@ -769,7 +860,7 @@ def authored_graph(request: Request, draft: Draft) -> dict[str, Any]:
 
 
 @composer_router.post("/resolution")
-async def resolution(request: Request, draft: ResolutionDraft) -> dict[str, Any]:
+def resolution(request: Request, draft: ResolutionDraft) -> dict[str, Any]:
     """Explain the current draft with resolved values and templates visible.
 
     Args:
@@ -782,14 +873,6 @@ async def resolution(request: Request, draft: ResolutionDraft) -> dict[str, Any]
     Raises:
         ComposerError: If the snapshot, authored source, or resolution is invalid.
     """
-    if request.app.state.settings.inspection_controller_enabled:
-        from .async_inspection import resolution as inspect_resolution
-
-        return await inspect_resolution(request, draft)
-    return await to_thread(_resolve_request, request, draft)
-
-
-def _resolve_request(request, draft):
     return _resolve_draft(request, draft, _draft_source(request, draft))
 
 
@@ -833,19 +916,12 @@ def repository_discovery(
 def _repository_discovery(request, client, repository=None):
     with request.app.state.database.transaction() as connection:
         registered = (
-            row(connection, registered_repositories, repository)
-            if repository is not None
-            else None
+            row(connection, registered_repositories, repository) if repository else None
         )
     discovered = (
         client.repositories(
             repository=repository,
-            **(
-                {"installation_id": registered["installation"]}
-                if registered
-                and request.app.state.settings.inspection_controller_enabled
-                else {}
-            ),
+            **({"installation_id": registered["installation"]} if registered else {}),
         )
         if repository is not None
         else client.repositories()
@@ -964,22 +1040,11 @@ def open_stack(
 
 
 @github_router.post("/pull-requests")
-async def pull_request(
+def pull_request(
     request: Request, draft: Draft, client: Annotated[GitHubClient, Depends(_github)]
 ):
     """Reinspect reviewed changes and open a PR under the user's permissions."""
-    if request.app.state.settings.inspection_controller_enabled:
-        from .async_inspection import review as inspect_review
-
-        snapshot, inspected = await inspect_review(
-            request, draft.model_copy(update={"editor_id": None, "generation": None})
-        )
-    else:
-        snapshot, inspected = await to_thread(_review, request, draft)
-    return await to_thread(_publish_reviewed_pr, request, client, snapshot, inspected)
-
-
-def _publish_reviewed_pr(request, client, snapshot, inspected):
+    snapshot, inspected = _review(request, draft, fresh=True)
     if not snapshot["repository"] or not inspected["diff"]:
         raise ComposerError("There are no repository changes to propose.")
     _authoring_write_access(request, snapshot["repository"])
@@ -1186,12 +1251,9 @@ def _ready(request: Request):
 
     from .database import grants, sessions
 
-    if (
-        request.app.state.settings.inspection_controller_enabled
-        and not request.app.state.inspection_notifications.connected
-    ):
+    if not request.app.state.configuration_events.connected:
         return JSONResponse(
-            {"status": "inspection notifications unavailable"}, status_code=503
+            {"status": "configuration listener unavailable"}, status_code=503
         )
     try:
         with request.app.state.database.transaction() as connection:
@@ -1205,6 +1267,13 @@ def _ready(request: Request):
 
 async def _dispatch_supervisors(request, call_next):
     response = await call_next(request)
+    if (
+        response.status_code < 400
+        and request.method in {"POST", "PUT", "PATCH", "DELETE"}
+        and ("configuration" in request.url.path or "/environments" in request.url.path)
+        and request.app.state.database.engine.dialect.name != "postgresql"
+    ):
+        request.app.state.configuration_events.changed()
     if (
         request.method == "POST"
         and response.status_code < 400
@@ -1225,18 +1294,7 @@ router.include_router(auth_router)
 
 @asynccontextmanager
 async def _lifespan(app):
-    from .inspection_notifications import InspectionNotifications
-
-    if app.state.settings.inspection_controller_enabled:
-        get_running_loop().set_default_executor(
-            ThreadPoolExecutor(max_workers=32, thread_name_prefix="inspection-api")
-        )
-    app.state.inspection_notifications = InspectionNotifications(app.state.database)
-    await app.state.inspection_notifications.start()
-    if app.state.settings.inspection_controller_enabled:
-        from .inspection_health import register
-
-        await to_thread(register, app.state.database, app.state.settings)
+    await app.state.configuration_events.start()
     try:
         if app.state.settings.execution_enabled:
             try:
@@ -1253,7 +1311,7 @@ async def _lifespan(app):
                 )
         yield
     finally:
-        await app.state.inspection_notifications.close()
+        await app.state.configuration_events.close()
         await to_thread(app.state.github_transport.close)
 
 
@@ -1267,9 +1325,13 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         FastAPI application with a separate CLI adapter and encrypted session store.
     """
     settings = settings or Settings()
+    from loguru import logger
+
+    logger.disable("stacksmith")
     configure_ca_bundle(CA_BUNDLE_MOUNT_PATH if settings.ca_bundle else None)
     app = FastAPI(title="Stacksmith Platform", version="0.1.0", lifespan=_lifespan)
     app.state.settings = settings
+    app.state.review_timings = TimingSamples()
     from .control import router as control_router
     from .database import Database, local_database
     from .execution_credentials import ExecutionCredentialCatalog
@@ -1278,11 +1340,18 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     from .secret_sources import SecretCatalog
 
     app.state.database = (
-        Database(app.state.settings.database_url, app.state.settings.secret_key)
+        Database.from_settings(app.state.settings)
         if app.state.settings.database_url
         else local_database(app.state.settings.database, app.state.settings.secret_key)
     )
-    app.state.adapter = StacksmithAdapter(app.state.settings)
+    app.state.editing_contexts = EditingContexts(app.state.database)
+    app.state.adapter = StacksmithAdapter(
+        app.state.settings, database=app.state.database
+    )
+    app.state.configuration_events = ConfigurationEvents(
+        settings.database_listener_url or settings.database_url,
+        app.state.editing_contexts,
+    )
     from .scheduling import KubernetesDispatcher
 
     app.state.dispatcher = (
@@ -1301,9 +1370,6 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     if app.state.settings.execution_enabled:
         app.state.artifacts = artifact_storage(app.state.settings)
     app.include_router(control_router)
-    from .inspection_sandboxes import router as sandbox_router
-
-    app.include_router(sandbox_router)
     app.add_middleware(
         TrustedHostMiddleware,
         allowed_hosts=[
@@ -1346,13 +1412,7 @@ def _authoring_write_access(request, repository):
     from .control import _identity as identity
     from .control import _repository_access
 
-    checked = request.app.state.settings.inspection_controller_enabled
-    if checked:
-        _authoring_access(request, repository)
+    _authoring_access(request, repository)
     _repository_access(
-        request,
-        identity(request),
-        repository,
-        permission="author",
-        github_checked=checked,
+        request, identity(request), repository, permission="author", github_checked=True
     )

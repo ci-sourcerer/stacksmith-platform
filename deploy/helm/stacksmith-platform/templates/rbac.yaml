@@ -9,8 +9,7 @@ metadata:
   name: {{ .Values.executionServiceAccount }}
   namespace: {{ .Values.executionNamespace }}
 automountServiceAccountToken: false
-{{- range $role := list "api" "supervisor" "inspection" }}
-{{- if or (ne $role "inspection") $.Values.inspectionPool.enabled }}
+{{- range $role := list "api" "supervisor" }}
 {{- if not (index $.Values.serviceAccounts $role).name }}
 ---
 apiVersion: v1
@@ -19,7 +18,6 @@ metadata:
   name: {{ $.Release.Name }}-{{ $role }}
   annotations: {{ (index $.Values.serviceAccounts $role).annotations | toYaml | nindent 4 }}
 automountServiceAccountToken: true
-{{- end }}
 {{- end }}
 {{- end }}
 ---
@@ -31,7 +29,7 @@ metadata:
 rules:
   - apiGroups: [batch]
     resources: [jobs]
-    verbs: [create, get, list, watch, delete]
+    verbs: [create, get, list, delete]
   - apiGroups: [""]
     resources: [pods, pods/log]
     verbs: [get, list]
@@ -45,11 +43,6 @@ subjects:
   - kind: ServiceAccount
     name: {{ default (printf "%s-supervisor" .Release.Name) .Values.serviceAccounts.supervisor.name }}
     namespace: {{ .Release.Namespace }}
-  {{- if .Values.inspectionPool.enabled }}
-  - kind: ServiceAccount
-    name: {{ default (printf "%s-inspection" .Release.Name) .Values.serviceAccounts.inspection.name }}
-    namespace: {{ .Release.Namespace }}
-  {{- end }}
 roleRef:
   kind: Role
   name: {{ .Release.Name }}-supervisor

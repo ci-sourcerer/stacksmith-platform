@@ -66,6 +66,7 @@ import { ConnectionDestination } from "./components/ConnectionDestination";
 import { useConfirmation } from "./components/Dialogs";
 import { useAuthoredGraph } from "./useAuthoredGraph";
 import { useDraftReview } from "./useDraftReview";
+import { useConfigurationEvents } from "./useConfigurationEvents";
 import {
   canRestore,
   parseRecovery,
@@ -161,7 +162,6 @@ export default function App() {
   const [sourceFailure, setSourceFailure] = useState<unknown>();
   const [inspectionAttempt, setInspectionAttempt] = useState(0);
   const [sourceAttempt, setSourceAttempt] = useState(0);
-  const sourceGeneration = useRef(0);
   const [recovery, setRecovery] = useState<Recovery>();
   const [storageError, setStorageError] = useState("");
   const [savedDraft, setSavedDraft] = useState(false);
@@ -502,8 +502,12 @@ export default function App() {
     semanticKey,
     Boolean(snapshot?.editable),
     inspectionAttempt,
-    Boolean(session.inspection_controller_enabled),
-    sourceKey,
+  );
+  useConfigurationEvents(
+    Boolean(session.execution_enabled && snapshot?.editable),
+    snapshot,
+    setSnapshot,
+    (failure) => setError(errorMessage(failure)),
   );
 
   useEffect(() => {
@@ -584,18 +588,6 @@ export default function App() {
           snapshot.document.metadata?.stacksmith_composer?.routes ?? [],
         )),
   );
-  const inspectedSource = session.inspection_controller_enabled
-    ? draftReview.result
-    : undefined;
-  const inspectedSourceKey = session.inspection_controller_enabled
-    ? semanticKey
-    : undefined;
-  const requestedSourceView = session.inspection_controller_enabled
-    ? view
-    : undefined;
-  const pendingSourceReview = session.inspection_controller_enabled
-    ? draftReview.inspecting
-    : undefined;
   useEffect(() => {
     setPr(undefined);
     setSourceError("");
@@ -605,34 +597,20 @@ export default function App() {
       setRendered({ key: sourceKey, source: snapshot.source, diff: "" });
       return;
     }
-    if (session.inspection_controller_enabled) {
-      if (
-        inspectedSource?.key === inspectedSourceKey &&
-        inspectedSource?.sourceKey === sourceKey
-      ) {
-        setRendered({
-          key: sourceKey,
-          source: inspectedSource.review.source,
-          diff: inspectedSource.review.diff,
-        });
-        return;
-      }
-      if (requestedSourceView !== "review") return;
-      if (pendingSourceReview) return;
+    if (view !== "review") return;
+    if (
+      draftReview.result?.key === semanticKey &&
+      Object.keys(positions).length === 0 &&
+      routes.length === 0
+    ) {
+      setRendered({ key: sourceKey, ...draftReview.result.review });
+      return;
     }
     const abort = new AbortController();
     const timer = setTimeout(() => {
       api<Pick<Review, "source" | "diff">>(
         "/source",
-        {
-          ...JSON.parse(sourceKey),
-          ...(session.inspection_controller_enabled
-            ? {
-                editor_id: draftReview.editorId,
-                generation: ++sourceGeneration.current,
-              }
-            : {}),
-        },
+        JSON.parse(sourceKey),
         abort.signal,
       )
         .then((result) => {
@@ -654,11 +632,11 @@ export default function App() {
     sourceKey,
     sourceAttempt,
     dirty,
-    session.inspection_controller_enabled,
-    requestedSourceView,
-    inspectedSource,
-    inspectedSourceKey,
-    pendingSourceReview,
+    view,
+    draftReview.result,
+    semanticKey,
+    positions,
+    routes,
   ]);
 
   useEffect(

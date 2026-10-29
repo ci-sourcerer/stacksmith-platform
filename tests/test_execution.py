@@ -16,58 +16,7 @@ from stacksmith_platform.execution import (
     _extract,
     _prepare,
 )
-from stacksmith_platform.settings import Settings
 from stacksmith_platform.worker import RunReconciler
-
-
-def test_docker_inspection_events_use_a_closable_stream(monkeypatch):
-    runtime = MagicMock()
-    events = MagicMock(spec=["__iter__", "close"])
-    events.__iter__.return_value = iter(
-        [{"Actor": {"Attributes": {"name": "sandbox"}}}]
-    )
-    runtime.events.return_value = events
-    monkeypatch.setattr("stacksmith_platform.drivers.docker.from_env", lambda: runtime)
-    assert list(DockerDriver(Settings(_env_file=None)).inspection_events()) == [
-        "sandbox"
-    ]
-    events.close.assert_called_once()
-
-
-def test_kubernetes_inspection_watch_tracks_versions_and_stops(monkeypatch):
-    driver = object.__new__(KubernetesDriver)
-    driver.settings = Settings(_env_file=None, execution_namespace="executions")
-    driver._inspection_version = None
-    driver.batch = MagicMock()
-    driver.batch.list_namespaced_job.return_value = SimpleNamespace(
-        metadata=SimpleNamespace(resource_version="11"), items=[]
-    )
-    stream = MagicMock(spec=["stream", "stop"])
-    stream.stream.return_value = iter(
-        [
-            {
-                "object": SimpleNamespace(
-                    metadata=SimpleNamespace(name="sandbox", resource_version="12")
-                )
-            }
-        ]
-    )
-    monkeypatch.setattr("stacksmith_platform.drivers.watch.Watch", lambda: stream)
-    assert list(driver.inspection_events()) == ["sandbox"]
-    assert driver._inspection_version == "12"
-    stream.stop.assert_called_once()
-
-
-def test_inspection_watch_scope_separates_deployments():
-    from stacksmith_platform.drivers import _inspection_pool
-
-    first = Settings(_env_file=None, execution_callback_url="http://first-api:8000")
-    second = first.model_copy(
-        update={"execution_callback_url": "http://second-api:8000"}
-    )
-    assert _inspection_pool(first, "shared-execution-namespace") != _inspection_pool(
-        second, "shared-execution-namespace"
-    )
 
 
 @pytest.mark.parametrize("phase", ["prepare", "inspect"])

@@ -6,10 +6,7 @@ import { api } from "./api";
 import { useDraftReview } from "./useDraftReview";
 import type { Review } from "./types";
 
-vi.mock("./api", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("./api")>()),
-  api: vi.fn(),
-}));
+vi.mock("./api", () => ({ api: vi.fn() }));
 
 let root: Root;
 let container: HTMLDivElement;
@@ -29,36 +26,18 @@ function Harness({
   draft,
   attempt,
   enabled,
-  controller = false,
-  sourceKey,
 }: {
   draft: string;
   attempt: number;
   enabled: boolean;
-  controller?: boolean;
-  sourceKey?: string;
 }) {
-  state = useDraftReview(draft, enabled, attempt, controller, sourceKey);
+  state = useDraftReview(draft, enabled, attempt);
   return null;
 }
 
-async function render(
-  draft = original,
-  attempt = 0,
-  enabled = true,
-  controller = false,
-  sourceKey?: string,
-) {
+async function render(draft = original, attempt = 0, enabled = true) {
   await act(async () =>
-    root.render(
-      createElement(Harness, {
-        draft,
-        attempt,
-        enabled,
-        controller,
-        sourceKey,
-      }),
-    ),
+    root.render(createElement(Harness, { draft, attempt, enabled })),
   );
 }
 
@@ -98,55 +77,6 @@ it("debounces edits and does not reinspect an unchanged semantic key", async () 
   await render(latest);
   await debounce();
   expect(api).toHaveBeenCalledTimes(1);
-});
-
-it("submits newer generations while an obsolete controller execution finishes", async () => {
-  let finish!: (value: Review) => void;
-  vi.mocked(api).mockImplementationOnce(
-    () =>
-      new Promise<Review>((resolve) => {
-        finish = resolve;
-      }) as never,
-  );
-  await render(original, 0, true, true);
-  await debounce();
-  const previous = vi.mocked(api).mock.calls[0];
-  await render(latest, 0, true, true);
-  await debounce();
-  expect(previous[2]?.aborted).toBe(true);
-  expect(api).toHaveBeenCalledTimes(2);
-  const first = previous[1] as { editor_id: string; generation: number };
-  const second = vi.mocked(api).mock.calls[1][1] as {
-    editor_id: string;
-    generation: number;
-  };
-  expect(second.editor_id).toBe(first.editor_id);
-  expect(second.generation).toBeGreaterThan(first.generation);
-  expect(state.result?.key).toBe(latest);
-  await act(async () => finish({ ...review, validation: "Obsolete" }));
-  expect(state.result?.review.validation).toBe("Valid");
-});
-
-it("records exact source inputs without scheduling inspection for layout-only changes", async () => {
-  const first = JSON.stringify({
-    snapshot: "signed",
-    positions: { app: { x: 0, y: 0 } },
-  });
-  const moved = JSON.stringify({
-    snapshot: "signed",
-    positions: { app: { x: 20, y: 10 } },
-  });
-  await render(original, 0, true, true, first);
-  await debounce();
-  expect(state.result?.sourceKey).toBe(first);
-  await render(original, 0, true, true, moved);
-  await debounce();
-  expect(api).toHaveBeenCalledTimes(1);
-  expect(state.result?.sourceKey).toBe(first);
-  await render(latest, 0, true, true, moved);
-  await debounce();
-  expect(vi.mocked(api).mock.calls[1][1]).toMatchObject(JSON.parse(moved));
-  expect(state.result?.sourceKey).toBe(moved);
 });
 
 it("finishes active work and only submits the newest pending draft", async () => {

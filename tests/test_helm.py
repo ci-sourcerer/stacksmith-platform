@@ -57,7 +57,7 @@ def test_chart_uses_temporary_supervisors_and_bounded_recovery():
     for container in (api["containers"][0], recovery["containers"][0]):
         assert {
             "name": "STACKSMITH_PLATFORM_INSPECTION_POLL_INTERVAL",
-            "value": "0.25",
+            "value": "2",
         } in container["env"]
     assert (
         recovery["containers"][0]["envFrom"][1]["secretRef"]["name"]
@@ -90,40 +90,6 @@ def test_chart_exposes_inspection_poll_interval_override():
             } in resource["spec"]["template"]["spec"]["containers"][0]["env"]
 
 
-def test_pool_chart_adds_shared_controller_and_execution_watch_permissions():
-    resources = _render("--set", "inspectionPool.enabled=true")
-    controller = next(
-        resource
-        for resource in resources
-        if resource["kind"] == "Deployment"
-        and resource["metadata"]["name"] == "test-inspections"
-    )["spec"]["template"]["spec"]
-    assert controller["serviceAccountName"] == "test-inspection"
-    assert controller["containers"][0]["command"] == ["stacksmith-platform-inspections"]
-    assert {
-        "name": "STACKSMITH_PLATFORM_INSPECTION_POOL_TOTAL",
-        "value": "30",
-    } in controller["containers"][0]["env"]
-    role = next(
-        resource
-        for resource in resources
-        if resource["kind"] == "Role"
-        and resource["metadata"]["name"] == "test-supervisor"
-    )
-    assert "watch" in role["rules"][0]["verbs"]
-    binding = next(
-        resource
-        for resource in resources
-        if resource["kind"] == "RoleBinding"
-        and resource["metadata"]["name"] == "test-supervisor"
-    )
-    assert {
-        "kind": "ServiceAccount",
-        "name": "test-inspection",
-        "namespace": "control",
-    } in binding["subjects"]
-
-
 def test_frontend_owns_ingress_without_receiving_api_secrets():
     resources = _render("--set", "ingress.enabled=true")
     frontend = next(
@@ -135,7 +101,10 @@ def test_frontend_owns_ingress_without_receiving_api_secrets():
     container = frontend["containers"][0]
     assert "envFrom" not in container
     assert container["env"] == [
-        {"name": "API_UPSTREAM", "value": "http://test-api.control.svc:8000"}
+        {
+            "name": "API_UPSTREAM",
+            "value": "http://test-api.control.svc.cluster.local:8000",
+        }
     ]
     assert container["securityContext"]["readOnlyRootFilesystem"]
     assert container["readinessProbe"]["httpGet"]["path"] == "/api/ready"

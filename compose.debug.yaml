@@ -64,23 +64,6 @@ services:
           path: ./uv.lock
         - action: rebuild
           path: ./pyproject.toml
-  inspection-controller:
-    image: ${STACKSMITH_PLATFORM_DEBUG_IMAGE:-stacksmith-platform:debug}
-    build: *python-build
-    working_dir: /tmp/build
-    environment:
-      PYTHONPATH: /tmp/build/src
-    tmpfs: !override []
-    read_only: false
-    develop:
-      watch:
-        - action: sync+restart
-          path: ./src
-          target: /tmp/build/src
-        - action: rebuild
-          path: ./uv.lock
-        - action: rebuild
-          path: ./pyproject.toml
   frontend:
     read_only: false
     image: ${STACKSMITH_PLATFORM_FRONTEND_DEBUG_IMAGE:-stacksmith-platform-frontend:debug}

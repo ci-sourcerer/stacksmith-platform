@@ -176,7 +176,6 @@ export interface Session {
   mode: "demo" | "github";
   login: string | null;
   execution_enabled?: boolean;
-  inspection_controller_enabled?: boolean;
 }
 
 export interface RunSummary {

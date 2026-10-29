@@ -19,7 +19,7 @@ def test_inspection_concurrency_must_be_positive(value):
 
 def test_inspection_poll_interval_default_and_environment(monkeypatch):
     monkeypatch.delenv("STACKSMITH_PLATFORM_INSPECTION_POLL_INTERVAL", raising=False)
-    assert Settings(_env_file=None).inspection_poll_interval == 0.25
+    assert Settings(_env_file=None).inspection_poll_interval == 2
     monkeypatch.setenv("STACKSMITH_PLATFORM_INSPECTION_POLL_INTERVAL", "0.5")
     assert Settings(_env_file=None).inspection_poll_interval == 0.5
 

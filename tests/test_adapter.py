@@ -13,6 +13,51 @@ from stacksmith_platform.errors import ComposerError
 from stacksmith_platform.settings import Settings
 
 
+def test_authoring_uses_the_library_without_configuration_credentials_or_processes(
+    tmp_path, monkeypatch
+):
+    adapter = StacksmithAdapter(
+        Settings(_env_file=None, config=tmp_path / "missing.yaml")
+    )
+    adapter.command = None
+    monkeypatch.setenv("GITHUB_TOKEN", "unused-user-credential")
+    source = (
+        "# keep this comment\nname: original\ncomponents:\n  app:\n    type: service\n"
+    )
+    with patch(
+        "subprocess.run", side_effect=AssertionError("Authoring started a subprocess")
+    ):
+        result = adapter.author(
+            source,
+            [{"action": "set", "path": ["name"], "value": "proposed"}],
+            "apps/stack.yaml",
+        )
+    assert result["version"] == 1 and result["validation"] == "document"
+    assert result["changed"]
+    assert "name: proposed" in result["source"]
+    assert result["source"].startswith("# keep this comment")
+    assert "unused-user-credential" not in str(result)
+    assert not (tmp_path / "missing.yaml").exists()
+
+
+@pytest.mark.parametrize(
+    "edits",
+    [
+        [{"action": "set", "path": ["name"], "value": 123}],
+        [{"action": "execute", "path": ["name"]}],
+    ],
+)
+def test_library_authoring_rejects_invalid_edits(edits):
+    adapter = StacksmithAdapter(Settings(_env_file=None))
+    with pytest.raises(ComposerError) as error:
+        adapter.author(
+            "name: example\ncomponents:\n  app:\n    type: service\n",
+            edits,
+            "stack.yaml",
+        )
+    assert error.value.status == 422
+
+
 def _queued_inspection(barrier, *args):
     barrier.wait(timeout=5)
     return "{}"
@@ -273,117 +318,3 @@ def test_catalog_module_source_url_rendering(
         },
     ):
         assert adapter.catalog()["remote"]["module_source_url"] == expected
-
-
-def test_authoring_uses_json_stdin_without_config_or_credentials(tmp_path, monkeypatch):
-    monkeypatch.setenv("GITHUB_TOKEN", "must-not-leak")
-    monkeypatch.setenv("STACKSMITH_GIT_TOKEN", "must-not-leak")
-    adapter = StacksmithAdapter(
-        Settings(_env_file=None, config=tmp_path / "missing.yaml")
-    )
-    adapter.command = "/example/bin/stacksmith"
-    response = {
-        "version": 1,
-        "validation": "document",
-        "source": "name: proposed\n",
-        "diff": "reviewed diff",
-        "changed": True,
-    }
-    edits = [{"action": "set", "path": ["name"], "value": "proposed"}]
-    with patch(
-        "subprocess.run",
-        return_value=subprocess.CompletedProcess([], 0, json.dumps(response), ""),
-    ) as run:
-        assert adapter.author("name: original\n", edits, "apps/stack.yaml") == response
-    assert run.call_args.args[0] == [adapter.command, "author"]
-    assert json.loads(run.call_args.kwargs["input"]) == {
-        "version": 1,
-        "source": "name: original\n",
-        "edits": edits,
-        "path": "apps/stack.yaml",
-    }
-    assert run.call_args.kwargs["shell"] is False
-    assert "STACKSMITH_GIT_TOKEN" not in run.call_args.kwargs["env"]
-    assert "GITHUB_TOKEN" not in run.call_args.kwargs["env"]
-    assert not Path(run.call_args.kwargs["cwd"]).exists()
-    assert not (tmp_path / "missing.yaml").exists()
-
-
-@pytest.mark.parametrize(
-    "response",
-    [
-        "not json",
-        json.dumps(
-            {
-                "version": 2,
-                "validation": "document",
-                "source": "source",
-                "diff": "",
-                "changed": False,
-            }
-        ),
-        json.dumps({"version": 1, "source": "source", "diff": "", "changed": False}),
-        json.dumps(
-            {
-                "version": 1,
-                "validation": "document",
-                "source": "source",
-                "diff": "",
-                "changed": "false",
-            }
-        ),
-    ],
-)
-def test_authoring_rejects_incompatible_success_responses(tmp_path, response):
-    adapter = StacksmithAdapter(
-        Settings(_env_file=None, config=tmp_path / "config.yaml")
-    )
-    adapter.command = "/example/bin/stacksmith"
-    with (
-        patch(
-            "subprocess.run",
-            return_value=subprocess.CompletedProcess([], 0, response, "secret-output"),
-        ),
-        pytest.raises(ComposerError) as error,
-    ):
-        adapter.author("name: example\n", [], "stack.yaml")
-    assert error.value.status == 502
-    assert "secret-output" not in str(error.value)
-
-
-def test_authoring_reports_document_rejection_without_exposing_cli_diagnostics(
-    tmp_path,
-):
-    adapter = StacksmithAdapter(
-        Settings(_env_file=None, config=tmp_path / "config.yaml")
-    )
-    adapter.command = "/example/bin/stacksmith"
-    response = json.dumps(
-        {"version": 1, "error": {"code": "invalid_document", "message": "secret-value"}}
-    )
-    with (
-        patch(
-            "subprocess.run",
-            return_value=subprocess.CompletedProcess([], 6, response, "secret-output"),
-        ),
-        pytest.raises(ComposerError) as error,
-    ):
-        adapter.author("name: example\n", [], "stack.yaml")
-    assert error.value.status == 422
-    assert "secret" not in str(error.value)
-
-
-def test_old_stacksmith_has_a_clear_authoring_compatibility_error(tmp_path):
-    adapter = StacksmithAdapter(
-        Settings(_env_file=None, config=tmp_path / "config.yaml")
-    )
-    adapter.command = "/example/bin/stacksmith"
-    with (
-        patch(
-            "subprocess.run",
-            return_value=subprocess.CompletedProcess([], 2, "", "unknown command"),
-        ),
-        pytest.raises(ComposerError, match="version 1 authoring") as error,
-    ):
-        adapter.author("name: example\n", [], "stack.yaml")
-    assert error.value.status == 502
