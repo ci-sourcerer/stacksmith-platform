@@ -1516,49 +1516,27 @@ it("makes unchanged source available immediately and renders edits independently
   expect(document.querySelector(".unsaved")).toBeNull();
 });
 
-it("keeps authored connections visible before inspection and after inspection fails", async () => {
+it("keeps the editor read-only when the initial inspection fails", async () => {
   vi.useFakeTimers();
   initialComponents = { data: { type: "service" }, app: { type: "service" } };
   localStorage.setItem(workspaceKey(login), JSON.stringify(workspace));
   const respond = vi.mocked(api).getMockImplementation()!;
   vi.mocked(api).mockImplementation((path, ...args) =>
     path === "/review"
-      ? Promise.reject(
-          new ApiError("Inspection failed", 422, {
-            stage: "info associations",
-            code: "command_failed",
-            exit_code: 2,
-            stdout: "",
-            stderr: "Missing region",
-          }),
-        )
+      ? Promise.reject(new Error("Inspection failed"))
       : respond(path, ...args),
   );
   await render("/#/stacks/acme/service/stack.yaml");
   await click("button", "Test connect scalar");
   expect(
     document.querySelector('[data-testid="draft-edges"]')?.textContent,
-  ).toContain('"source":"data"');
-  expect(vi.mocked(api).mock.calls.some(([path]) => path === "/review")).toBe(
-    false,
-  );
+  ).toBe("[]");
   await act(async () => {
     vi.advanceTimersByTime(450);
   });
-  expect(
-    document.querySelector('[data-testid="draft-edges"]')?.textContent,
-  ).toContain('"source":"data"');
-  expect(document.body.textContent).toContain("Missing region");
-  await click("button", "Test undo");
-  expect(
-    document.querySelector('[data-testid="draft-edges"]')?.textContent,
-  ).toBe("[]");
-  await click("button", "Test redo");
-  expect(
-    document.querySelector('[data-testid="draft-edges"]')?.textContent,
-  ).toContain('"source":"data"');
+  expect(document.body.textContent).toContain("Inspection failed");
+  expect(document.body.textContent).toContain("Retry inspection");
 });
-
 it("chooses a nested destination and preserves sibling values", async () => {
   initialComponents = {
     data: { type: "service" },
