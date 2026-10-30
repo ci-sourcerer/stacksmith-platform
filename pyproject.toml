@@ -72,6 +72,7 @@ args = [
   { name = "debug", options = ["--debug"], type = "boolean" },
   { name = "detach", options = ["--detach"], type = "boolean" },
   { name = "no_cache", options = ["--no-cache"], type = "boolean" },
+  { name = "no_rebuild", options = ["--no-rebuild"], type = "boolean" },
 ]
 
 [tool.poe.tasks.platform-image]
