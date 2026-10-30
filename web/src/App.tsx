@@ -474,8 +474,7 @@ export default function App() {
   }, [inspectionContextKey]);
 
   useEffect(() => {
-    if (loading || !session || (session.mode === "github" && !session.login))
-      return;
+    if (!session || (session.mode === "github" && !session.login)) return;
     if (!route.stack) {
       setOpeningStack(false);
       if (session.mode === "demo") {
@@ -501,7 +500,7 @@ export default function App() {
         if (!abort.signal.aborted) setOpeningStack(false);
       });
     return () => abort.abort();
-  }, [loading, session, route.stack]);
+  }, [session, route.stack]);
 
   const draftReview = useDraftReview(
     semanticKey,

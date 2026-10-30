@@ -1430,6 +1430,32 @@ it("changes inspection environment through Settings without reopening or rewriti
   ).toBe("");
 });
 
+it("prepares the first review while platform information is loading", async () => {
+  vi.useFakeTimers();
+  localStorage.setItem(workspaceKey(login), JSON.stringify(workspace));
+  const respond = vi.mocked(api).getMockImplementation()!;
+  let release!: (value: never) => void;
+  vi.mocked(api).mockImplementation((path, ...args) =>
+    path.startsWith("/platform")
+      ? (new Promise((resolve) => {
+          release = resolve;
+        }) as never)
+      : respond(path, ...args),
+  );
+  await render("/#/stacks/acme/service/stack.yaml");
+  await inspect();
+  expect(
+    vi.mocked(api).mock.calls.filter(([path]) => path === "/review"),
+  ).toHaveLength(1);
+  await act(async () => release((await respond("/platform")) as never));
+  await inspect();
+  expect(
+    vi.mocked(api).mock.calls.filter(([path]) => path === "/review"),
+  ).toHaveLength(1);
+  expect(
+    document.querySelector('button[aria-label="Add Service"]'),
+  ).toBeTruthy();
+});
 it("opens the canvas before review and uses its catalog without duplicate inspections", async () => {
   vi.useFakeTimers();
   localStorage.setItem(workspaceKey(login), JSON.stringify(workspace));
