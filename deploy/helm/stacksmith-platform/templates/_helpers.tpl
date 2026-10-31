@@ -23,4 +23,5 @@
 - {name: STACKSMITH_PLATFORM_SUPERVISOR_MEMORY, value: {{ .Values.supervisor.memory | quote }}}
 - {name: STACKSMITH_PLATFORM_INSPECTION_WAIT_TIMEOUT, value: {{ .Values.inspectionWaitTimeout | quote }}}
 - {name: STACKSMITH_PLATFORM_INSPECTION_POLL_INTERVAL, value: {{ .Values.inspectionPollInterval | quote }}}
+- {name: STACKSMITH_PLATFORM_REVIEW_PROFILING, value: {{ .Values.reviewProfiling | quote }}}
 {{- end -}}

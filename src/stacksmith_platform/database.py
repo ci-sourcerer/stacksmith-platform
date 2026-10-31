@@ -1,5 +1,8 @@
 import base64
 import hashlib
+import json
+import logging
+import sys
 import time
 from contextlib import contextmanager
 from pathlib import Path
@@ -173,6 +176,7 @@ class Database:
         self._checkout = TimingSamples()
         self._metrics_lock = Lock()
         self._checkout_timeouts = 0
+        self._active_transactions = {}
         self._peak_in_use = 0
         self.engine = create_engine(
             url,
@@ -258,6 +262,10 @@ class Database:
         Yields:
             A database connection committed on success and rolled back on error.
         """
+        owner = (
+            f"{sys._getframe(2).f_globals.get('__name__', 'unknown')}."
+            f"{sys._getframe(2).f_code.co_name}"
+        )
         started = time.monotonic()
         try:
             connection = self.engine.connect()
@@ -265,12 +273,26 @@ class Database:
             self._checkout.observe(time.monotonic() - started)
             with self._metrics_lock:
                 self._checkout_timeouts += 1
+                holders = [
+                    {"owner": name, "held_seconds": time.monotonic() - acquired}
+                    for name, acquired in self._active_transactions.values()
+                ]
+            logging.getLogger(__name__).warning(
+                "DATABASE_POOL_TIMEOUT %s",
+                json.dumps({"waiting": owner, "holders": holders}),
+            )
             raise
         self._checkout.observe(time.monotonic() - started)
-        with connection, connection.begin():
-            if self.engine.dialect.name == "sqlite":
-                connection.exec_driver_sql("BEGIN IMMEDIATE")
-            yield connection
+        with self._metrics_lock:
+            self._active_transactions[id(connection)] = (owner, time.monotonic())
+        try:
+            with connection, connection.begin():
+                if self.engine.dialect.name == "sqlite":
+                    connection.exec_driver_sql("BEGIN IMMEDIATE")
+                yield connection
+        finally:
+            with self._metrics_lock:
+                self._active_transactions.pop(id(connection), None)
 
     def encrypt(self, value: str) -> str:
         """Encrypt a secret value.

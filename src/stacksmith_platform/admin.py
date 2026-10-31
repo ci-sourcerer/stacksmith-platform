@@ -50,6 +50,9 @@ def main() -> None:
                 "GRANT SELECT, INSERT, UPDATE, DELETE ON runs, deployment_locks, workers, artifacts, scheduler_health TO platform_worker"
             )
             connection.exec_driver_sql(
+                "GRANT SELECT, INSERT, UPDATE, DELETE ON prepared_contexts TO platform_api, platform_worker"
+            )
+            connection.exec_driver_sql(
                 "GRANT INSERT ON audits TO platform_api, platform_worker"
             )
             connection.exec_driver_sql("GRANT SELECT ON audits TO platform_api")

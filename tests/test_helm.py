@@ -161,3 +161,24 @@ def test_schema_hook_upgrades_and_grants_before_application_startup():
         container["envFrom"][1]["secretRef"]["name"]
         == "stacksmith-platform-migration-database"
     )
+
+
+def test_review_profiling_is_opt_in():
+    for arguments, expected in (
+        ((), "false"),
+        (("--set", "reviewProfiling=true"), "true"),
+    ):
+        deployment = next(
+            item
+            for item in _render(*arguments)
+            if item["kind"] == "Deployment" and item["metadata"]["name"] == "test-api"
+        )
+        environment = deployment["spec"]["template"]["spec"]["containers"][0]["env"]
+        assert (
+            next(
+                item["value"]
+                for item in environment
+                if item["name"] == "STACKSMITH_PLATFORM_REVIEW_PROFILING"
+            )
+            == expected
+        )

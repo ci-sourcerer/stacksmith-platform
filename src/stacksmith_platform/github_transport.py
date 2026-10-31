@@ -1,6 +1,7 @@
 import hashlib
 import json
 import os
+import random
 import ssl
 import time
 from collections import OrderedDict
@@ -17,6 +18,7 @@ import certifi
 from anyio.from_thread import start_blocking_portal
 
 from .errors import ComposerError
+from .review_profiling import _capture
 
 
 @dataclass(frozen=True)
@@ -98,11 +100,11 @@ class GitHubTransport:
                     start_blocking_portal(name="github-http")
                 )
             pending = self._portal.start_task_soon(
-                partial(self._request, method, path, **kwargs)
+                partial(self._request, method, path, _profile=_capture(), **kwargs)
             )
         return pending.result()
 
-    async def _request(self, method, path, **kwargs):
+    async def _request(self, method, path, _profile=(None, None), **kwargs):
         if self._session is None:
             self._session = aiohttp.ClientSession(
                 base_url=self._base_url,
@@ -118,6 +120,30 @@ class GitHubTransport:
                 timeout=aiohttp.ClientTimeout(total=20),
                 trust_env=True,
             )
+        try:
+            with anyio.fail_after(20):
+                return await self._retry_request(method, path, _profile, kwargs)
+        except (aiohttp.ClientError, TimeoutError) as exc:
+            raise ComposerError(
+                "GitHub is temporarily unreachable. Please retry.", 502
+            ) from exc
+
+    async def _retry_request(self, method, path, profile, kwargs):
+        try:
+            response, retryable = await self._attempt(method, path, profile, kwargs)
+        except aiohttp.ClientSSLError, aiohttp.ServerFingerprintMismatch:
+            raise
+        except aiohttp.ClientConnectionError, aiohttp.ClientPayloadError, TimeoutError:
+            if method != "GET":
+                raise
+        else:
+            if method != "GET" or not retryable:
+                return response
+        await anyio.sleep(random.uniform(0.1, 0.3))
+        response, _ = await self._attempt(method, path, profile, kwargs, retried=True)
+        return response
+
+    async def _attempt(self, method, path, profile, kwargs, *, retried=False):
         key = _conditional_key(method, path, kwargs)
         cached = self._conditional.get(key)
         if cached and time.monotonic() - cached[2] >= 300:
@@ -128,20 +154,43 @@ class GitHubTransport:
                 **kwargs,
                 "headers": {**kwargs.get("headers", {}), "If-None-Match": cached[0]},
             }
+        started = time.perf_counter()
+        status = None
+        outcome = "network"
         try:
             async with self._session.request(
                 method, path, allow_redirects=False, **kwargs
             ) as response:
+                content = await response.read()
+                status = response.status
+                outcome = str(status)
                 return self._conditional_response(
                     key,
                     cached,
-                    GitHubResponse(response.status, await response.read()),
+                    GitHubResponse(status, content),
                     response.headers.get("etag"),
+                ), (
+                    status in {500, 502, 503, 504}
+                    and "Retry-After" not in response.headers
+                    and response.headers.get("X-RateLimit-Remaining") != "0"
                 )
-        except (aiohttp.ClientError, TimeoutError) as exc:
-            raise ComposerError(
-                "GitHub is temporarily unreachable. Please retry.", 502
-            ) from exc
+        except TimeoutError:
+            outcome = "timeout"
+            raise
+        except anyio.get_cancelled_exc_class():
+            outcome = "cancelled"
+            raise
+        finally:
+            if profile[0] is not None:
+                profile[0]._observe(
+                    profile[1],
+                    path,
+                    time.perf_counter() - started,
+                    status,
+                    key if not retried else None,
+                    retried=retried,
+                    outcome=outcome,
+                )
 
     def _conditional_response(self, key, cached, response, etag):
         if response.status_code == 304:

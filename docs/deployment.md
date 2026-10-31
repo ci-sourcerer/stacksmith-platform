@@ -125,6 +125,8 @@ uv run poe kube-up
 
 `kube-up` checks `.env`, builds the Python, frontend, and execution images, loads them into Minikube, and provisions local PostgreSQL and artifact storage with persistent volumes. It creates the shared configuration and three database Secrets, installs the Helm chart, creates the artifact bucket, and starts a background port forward to <http://localhost:8000>. It reads AWS credentials from the shell or the `root` profile for the control plane. These are also passed to runs unless execution credential providers are configured; explicit `STACKSMITH_RUN_` entries still apply. Run `uv run poe kube-up` again after rebuilding or renewing credentials; it updates the Secrets and restarts the API and frontend. If only the port forward has stopped, run `uv run poe kube-forward`.
 
+For a Minikube volume containing a PostgreSQL 17 cluster at its root, set `STACKSMITH_PLATFORM_MINIKUBE_POSTGRES_IMAGE=postgres:17-alpine` and `STACKSMITH_PLATFORM_MINIKUBE_POSTGRES_PGDATA=/var/lib/postgresql` in `.env` before running `kube-up`. These settings are independent of Compose. `STACKSMITH_PLATFORM_MINIKUBE_POSTGRES_VOLUME` can select a different persistent volume claim; its default is `stacksmith-postgres-data`. Changing the image major version does not upgrade existing data.
+
 The local image allowance is enabled only by this task. Regular Helm deployments still require an immutable named execution image digest. The PostgreSQL and storage volumes persist across reruns; keep the generated database passwords in `.env` stable. Free local port 8000 before starting the forward, for example by stopping the Compose stack.
 
 ### Helm

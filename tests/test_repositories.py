@@ -1,5 +1,8 @@
+from functools import partial
+from unittest.mock import MagicMock, patch
+
 import pytest
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, event
 
 from stacksmith_platform.database import (
     Database,
@@ -74,7 +77,8 @@ def test_user_discovery_does_not_revoke_other_users_repositories(database):
         assert row(connection, repositories, "org/other")["branch"] == "trunk"
 
 
-def test_rename_preserves_repository_settings_and_references(database):
+@pytest.mark.parametrize("complete", [False, True])
+def test_rename_preserves_repository_settings_and_references(database, complete):
     synchronize(database, [_repository()])
     with database.transaction() as connection:
         connection.execute(repositories.update().values(deployment_enabled=1))
@@ -112,7 +116,7 @@ def test_rename_preserves_repository_settings_and_references(database):
             runs.insert().values(id="run", repository="org/stack", lock_key="org/stack")
         )
         connection.execute(locks.insert().values(id="org/stack", run="run"))
-    synchronize(database, [_repository("org/renamed")], complete=True)
+    synchronize(database, [_repository("org/renamed")], complete=complete)
     with database.transaction() as connection:
         assert row(connection, repositories, "org/stack") is None
         assert row(connection, repositories, "org/renamed")["deployment_enabled"] == 1
@@ -136,12 +140,15 @@ def test_rename_preserves_repository_settings_and_references(database):
         assert row(connection, locks, "org/renamed")["run"] == "run"
 
 
-def test_recreated_repository_does_not_inherit_previous_consent_or_roles(database):
+@pytest.mark.parametrize("complete", [False, True])
+def test_recreated_repository_does_not_inherit_previous_consent_or_roles(
+    database, complete
+):
     synchronize(database, [_repository()])
     with database.transaction() as connection:
         connection.execute(repositories.update().values(deployment_enabled=1))
         connection.execute(grants.insert().values(id="grant", repository="org/stack"))
-    synchronize(database, [_repository(identifier=99)], complete=True)
+    synchronize(database, [_repository(identifier=99)], complete=complete)
     with database.transaction() as connection:
         assert row(connection, repositories, "org/stack")["deployment_enabled"] == 0
         assert row(connection, repositories, "github:42")["enabled"] == 0
@@ -164,3 +171,104 @@ def test_unversioned_schema_is_rejected_without_changing_data(tmp_path):
         ).one() == ("org/stack", 1)
     database.engine.dispose()
     engine.dispose()
+
+
+def _record_repository_updates(
+    statements, connection, cursor, statement, parameters, context, executemany
+):
+    if statement.lstrip().upper().startswith("UPDATE REPOSITORIES "):
+        statements.append(statement)
+
+
+@pytest.fixture
+def repository_updates(database):
+    statements = []
+    listener = partial(_record_repository_updates, statements)
+    event.listen(database.engine, "before_cursor_execute", listener)
+    try:
+        yield statements
+    finally:
+        event.remove(database.engine, "before_cursor_execute", listener)
+
+
+def test_unchanged_user_discovery_does_not_update_repository(
+    database, repository_updates
+):
+    synchronize(database, [_repository()])
+    synchronize_user(
+        database,
+        [
+            {
+                "github_id": "42",
+                "name": "org/stack",
+                "installation_id": 3,
+                "default_branch": "main",
+            }
+        ],
+    )
+    synchronize_user(
+        database,
+        [
+            {
+                "github_id": "42",
+                "name": "org/stack",
+                "installation_id": 3,
+                "default_branch": "main",
+            }
+        ],
+    )
+    assert repository_updates == []
+
+
+@pytest.mark.parametrize(
+    ("key", "value"), [("branch", "trunk"), ("installation", 9), ("enabled", 0)]
+)
+def test_user_discovery_corrects_changed_metadata(
+    database, repository_updates, key, value
+):
+    synchronize(database, [_repository()])
+    with database.transaction() as connection:
+        connection.execute(repositories.update().values({key: value}))
+    repository_updates.clear()
+    synchronize_user(
+        database,
+        [
+            {
+                "github_id": "42",
+                "name": "org/stack",
+                "installation_id": 3,
+                "default_branch": "main",
+            }
+        ],
+    )
+    assert len(repository_updates) == 1
+    with database.transaction() as connection:
+        assert (
+            row(connection, repositories, "org/stack")[key]
+            == {"branch": "main", "installation": 3, "enabled": 1}[key]
+        )
+
+
+def test_unchanged_catalog_bypasses_synchronization_locks(database, repository_updates):
+    synchronize(database, [_repository()])
+    lock = MagicMock()
+    with (
+        patch("stacksmith_platform.repositories._CATALOG_LOCK", lock),
+        patch(
+            "stacksmith_platform.repositories._upsert",
+            side_effect=AssertionError("No write path needed"),
+        ),
+    ):
+        synchronize(database, iter([_repository()]))
+    lock.__enter__.assert_not_called()
+    assert repository_updates == []
+
+
+def test_complete_catalog_keeps_locked_refresh_even_when_metadata_matches(database):
+    synchronize(database, [_repository()])
+    lock = MagicMock()
+    with patch("stacksmith_platform.repositories._CATALOG_LOCK", lock):
+        synchronize(database, [_repository()], complete=True)
+    lock.__enter__.assert_called_once()
+    with database.transaction() as connection:
+        assert row(connection, repositories, "org/stack")["enabled"] == 1

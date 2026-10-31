@@ -59,6 +59,7 @@ class Settings(BaseSettings):
     supervisor_memory: str = "1Gi"
     inspection_wait_timeout: int | None = Field(default=None, ge=1)
     inspection_concurrency: int = Field(default=4, ge=1)
+    review_profiling: bool = False
     inspection_poll_interval: float = Field(default=2, gt=0, allow_inf_nan=False)
     execution_namespace: str = "stacksmith-runs"
     execution_service_account: str = "stacksmith-execution"

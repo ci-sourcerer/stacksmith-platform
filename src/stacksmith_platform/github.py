@@ -2,6 +2,8 @@ import base64
 import hashlib
 import json
 from collections.abc import Callable
+from concurrent.futures import ThreadPoolExecutor
+from contextvars import copy_context
 from typing import Any
 from urllib.parse import quote
 
@@ -128,16 +130,9 @@ class GitHubClient:
             ComposerError: GitHub discovery fails or exceeds its page limit.
         """
         if repository is not None and installation_id is not None:
-            try:
-                discovered = self._installation_repositories(
-                    {"id": installation_id}, repository
-                )
-            except ComposerError as error:
-                if error.status != 404:
-                    raise
-                discovered = {}
-            if discovered:
-                return self._accessible_repositories(list(discovered.values()))
+            discovered = self._hinted_repositories(repository, installation_id)
+            if discovered is not None:
+                return discovered
         repositories = {}
         for installation in self._pages("/user/installations", "installations"):
             repositories.update(
@@ -146,6 +141,25 @@ class GitHubClient:
         return self._accessible_repositories(
             sorted(repositories.values(), key=lambda item: item["name"])
         )
+
+    def _hinted_repositories(self, repository, installation_id):
+        with ThreadPoolExecutor(max_workers=1) as executor:
+            pending_metadata = executor.submit(
+                copy_context().run, self._repository, *repository.split("/", 1)
+            )
+            try:
+                discovered = self._installation_repositories(
+                    {"id": installation_id}, repository
+                )
+            except ComposerError as error:
+                if error.status != 404:
+                    raise
+                return None
+            if discovered:
+                return self._accessible_repositories(
+                    list(discovered.values()), pending_metadata=pending_metadata
+                )
+        return None
 
     def _installation_repositories(self, installation, repository):
         repositories = {}
@@ -176,12 +190,16 @@ class GitHubClient:
                 break
         return repositories
 
-    def _accessible_repositories(self, discovered):
+    def _accessible_repositories(self, discovered, *, pending_metadata=None):
         accessible = []
         for item in discovered:
             owner, name = item["name"].split("/", 1)
             try:
-                metadata = self._repository(owner, name)
+                metadata = (
+                    pending_metadata.result()
+                    if pending_metadata is not None
+                    else self._repository(owner, name)
+                )
             except ComposerError as error:
                 if error.status != 404:
                     raise

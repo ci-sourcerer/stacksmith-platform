@@ -1,4 +1,6 @@
 import json
+from threading import Event
+from types import SimpleNamespace
 
 import httpx
 import pytest
@@ -304,7 +306,10 @@ def test_targeted_discovery_freshly_verifies_installation_hint(hint_status):
     if hint_status == 403:
         with pytest.raises(ComposerError, match="access was denied"):
             GitHubClient("token", _transport(handle)).repositories("org/stacks", 99)
-        assert requested == ["/user/installations/99/repositories"]
+        assert set(requested) == {
+            "/user/installations/99/repositories",
+            "/repos/org/stacks",
+        }
     else:
         assert (
             GitHubClient("token", _transport(handle)).repositories("org/stacks", 99)[0][
@@ -317,7 +322,8 @@ def test_targeted_discovery_freshly_verifies_installation_hint(hint_status):
 
 
 @pytest.mark.parametrize("status", [403, 404])
-def test_targeted_discovery_checks_current_repository_access(status):
+@pytest.mark.parametrize("installation_id", [None, 99])
+def test_targeted_discovery_checks_current_repository_access(status, installation_id):
     fixture = DiscoveryFixture()
 
     def handle(request):
@@ -327,10 +333,15 @@ def test_targeted_discovery_checks_current_repository_access(status):
 
     if status == 403:
         with pytest.raises(ComposerError, match="access was denied"):
-            GitHubClient("token", _transport(handle)).repositories("org/stacks")
+            GitHubClient("token", _transport(handle)).repositories(
+                "org/stacks", installation_id
+            )
     else:
         assert (
-            GitHubClient("token", _transport(handle)).repositories("org/stacks") == []
+            GitHubClient("token", _transport(handle)).repositories(
+                "org/stacks", installation_id
+            )
+            == []
         )
 
 
@@ -397,3 +408,65 @@ def test_custom_property_authentication_failures_still_surface():
 
     with pytest.raises(ComposerError, match="access was denied"):
         GitHubClient("token", _transport(handle)).repositories()
+
+
+class _ConcurrentDiscoveryFixture(DiscoveryFixture):
+    def __init__(self):
+        self.membership_started = Event()
+        self.metadata_started = Event()
+        self.attributions = []
+
+    def handle(self, request):
+        """Verify independent reads overlap and capture review attribution.
+
+        Args:
+            request: GitHub API request from the test client.
+
+        Returns:
+            The fixture response.
+
+        Raises:
+            AssertionError: Requests did not overlap within the test timeout.
+        """
+        from stacksmith_platform.review_profiling import _capture
+
+        profile, stage = _capture()
+        self.attributions.append(
+            (request.url.path, profile.identifier if profile else None, stage)
+        )
+        if request.url.path == "/user/installations/99/repositories":
+            self.membership_started.set()
+            assert self.metadata_started.wait(timeout=5)
+        elif request.url.path == "/repos/org/stacks":
+            self.metadata_started.set()
+            assert self.membership_started.wait(timeout=5)
+        return super().handle(request)
+
+
+def _profiled_discovery(request):
+    return request.client.repositories("org/stacks", 99)
+
+
+def test_hinted_discovery_overlaps_independent_reads_with_profile_context():
+    from stacksmith_platform.review_profiling import profile_review
+
+    fixture = _ConcurrentDiscoveryFixture()
+    request = SimpleNamespace(
+        client=GitHubClient("token", _transport(fixture.handle)),
+        headers={"X-Review-Profile-ID": "a" * 32},
+        app=SimpleNamespace(
+            state=SimpleNamespace(
+                settings=SimpleNamespace(review_profiling=True),
+                github_transport=SimpleNamespace(counter_id="test-process"),
+            )
+        ),
+    )
+    assert profile_review(_profiled_discovery)(request)[0]["name"] == "org/stacks"
+    assert {path for path, _, _ in fixture.attributions} >= {
+        "/user/installations/99/repositories",
+        "/repos/org/stacks",
+    }
+    assert all(
+        identifier == "a" * 32 and stage == "preflight"
+        for _, identifier, stage in fixture.attributions
+    )

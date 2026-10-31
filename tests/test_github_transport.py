@@ -226,3 +226,47 @@ def test_configured_ca_bundle_is_used(github_server, monkeypatch):
     with closing(GitHubTransport(github_server)) as transport:
         transport.request("GET", "/user")
     context.assert_called_once_with(cafile=certifi.where())
+
+
+def _profiled_requests(request):
+    from stacksmith_platform.review_profiling import _stage
+
+    request.transport.request(
+        "GET", "/conditional", headers={"Authorization": "Bearer secret"}
+    )
+    _stage("completion")
+    request.transport.request(
+        "GET", "/conditional", headers={"Authorization": "Bearer secret"}
+    )
+
+
+def test_profile_records_wire_conditional_hits(github_server, caplog):
+    import logging
+    from types import SimpleNamespace
+
+    from stacksmith_platform.review_profiling import profile_review
+
+    with closing(GitHubTransport(github_server)) as transport:
+        request = SimpleNamespace(
+            transport=transport,
+            headers={},
+            app=SimpleNamespace(
+                state=SimpleNamespace(
+                    settings=SimpleNamespace(review_profiling=True),
+                    github_transport=transport,
+                )
+            ),
+        )
+        with caplog.at_level(logging.INFO):
+            profile_review(_profiled_requests)(request)
+    event = json.loads(
+        next(
+            record.getMessage().split("REVIEW_PROFILE ")[1]
+            for record in caplog.records
+            if "REVIEW_PROFILE " in record.getMessage()
+        )
+    )
+    assert sum(item["count"] for item in event["github"]) == 2
+    assert sum(item["conditional_hits"] for item in event["github"]) == 1
+    assert {item["stage"] for item in event["github"]} == {"preflight", "completion"}
+    assert "secret" not in json.dumps(event)

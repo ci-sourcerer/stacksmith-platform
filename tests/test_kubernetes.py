@@ -34,6 +34,13 @@ def test_local_stack_provisions_database_secrets_and_multiline_configuration(
     )
     postgres_container = database["spec"]["template"]["spec"]["containers"][0]
     assert postgres_container["image"] == "postgres:18-alpine"
+    assert postgres_container["readinessProbe"]["exec"]["command"] == [
+        "pg_isready",
+        "-U",
+        "platform",
+        "-d",
+        "platform",
+    ]
     data_mount = next(
         mount for mount in postgres_container["volumeMounts"] if mount["name"] == "data"
     )
@@ -90,6 +97,7 @@ def test_minikube_loads_both_application_images_and_restarts_frontend(
     monkeypatch.chdir(tmp_path)
     Path(".env").write_text(
         "STACKSMITH_PLATFORM_FRONTEND_IMAGE=custom-frontend:local\n"
+        "STACKSMITH_PLATFORM_MINIKUBE_POSTGRES_IMAGE=postgres:17-alpine\n"
     )
     monkeypatch.setattr(kubernetes, "_run", MagicMock(return_value="minikube"))
     monkeypatch.setattr(kubernetes, "_kubectl", MagicMock())
@@ -101,6 +109,9 @@ def test_minikube_loads_both_application_images_and_restarts_frontend(
     kubernetes.up()
     kubernetes._run.assert_any_call(
         "minikube", "image", "load", "--overwrite=true", "custom-frontend:local"
+    )
+    kubernetes._run.assert_any_call(
+        "minikube", "image", "load", "--overwrite=true", "postgres:17-alpine"
     )
     assert "frontendImage=custom-frontend:local" in kubernetes._run.call_args.args
     kubernetes._kubectl.assert_any_call(
@@ -129,3 +140,38 @@ def test_port_forward_targets_frontend_service(tmp_path, monkeypatch):
         "service/stacksmith-frontend" in kubernetes.subprocess.Popen.call_args.args[0]
     )
     assert "8000:8080" in kubernetes.subprocess.Popen.call_args.args[0]
+
+
+def test_minikube_uses_configured_postgres_image_and_data_path():
+    values = {
+        "STACKSMITH_PLATFORM_DB_PASSWORD": "admin",
+        "STACKSMITH_PLATFORM_API_DB_PASSWORD": "api",
+        "STACKSMITH_PLATFORM_WORKER_DB_PASSWORD": "worker",
+        "STACKSMITH_PLATFORM_ARTIFACT_ACCESS_KEY": "key",
+        "STACKSMITH_PLATFORM_ARTIFACT_SECRET_KEY": "secret",
+        "STACKSMITH_PLATFORM_MINIKUBE_POSTGRES_IMAGE": "postgres:17-alpine",
+        "STACKSMITH_PLATFORM_MINIKUBE_POSTGRES_PGDATA": "/var/lib/postgresql",
+        "STACKSMITH_PLATFORM_MINIKUBE_POSTGRES_VOLUME": "postgres-copy",
+    }
+    deployment = next(
+        item
+        for item in _resources(values, {})
+        if item.get("kind") == "Deployment"
+        and item["metadata"]["name"] == "stacksmith-postgres"
+    )
+    container = deployment["spec"]["template"]["spec"]["containers"][0]
+    assert (
+        deployment["spec"]["template"]["spec"]["volumes"][0]["persistentVolumeClaim"][
+            "claimName"
+        ]
+        == "postgres-copy"
+    )
+    assert any(
+        item.get("kind") == "PersistentVolumeClaim"
+        and item["metadata"]["name"] == "postgres-copy"
+        for item in _resources(values, {})
+    )
+    assert container["image"] == "postgres:17-alpine"
+    assert {item["name"]: item["value"] for item in container["env"]}[
+        "PGDATA"
+    ] == "/var/lib/postgresql"

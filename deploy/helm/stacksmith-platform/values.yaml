@@ -34,6 +34,7 @@ supervisor:
   memory: 1Gi
 inspectionWaitTimeout: 180
 inspectionPollInterval: 2
+reviewProfiling: false
 recovery:
   resources:
     requests: {cpu: 100m, memory: 256Mi}

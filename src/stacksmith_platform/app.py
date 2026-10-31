@@ -38,6 +38,8 @@ from .metrics import TimingSamples
 from .platform import platform_summary
 from .repositories import synchronize, synchronize_user
 from .repository_filter import filtered, get_filter
+from .review_profiling import _stage as _profile_stage
+from .review_profiling import profile_review
 from .sessions import SessionStore
 from .settings import Settings
 
@@ -463,6 +465,7 @@ def _draft_modified(snapshot, draft):
     )
 
 
+@profile_review
 def _review(
     request: Request, draft: Draft, *, fresh=False
 ) -> tuple[dict[str, Any], dict[str, Any]]:
@@ -475,6 +478,7 @@ def _review(
     adapter = _adapter(request, snapshot.get("repository"), context)
     timings["preflight"] = perf_counter() - started
     stage_started = perf_counter()
+    _profile_stage("inspection")
     result = request.app.state.editing_contexts.review(
         None
         if fresh
@@ -486,6 +490,7 @@ def _review(
     )
     timings["inspection"] = perf_counter() - stage_started
     stage_started = perf_counter()
+    _profile_stage("completion")
     source = result["source"]
     _check_draft_source(request, snapshot, source)
     catalog = result["catalog"]
@@ -495,6 +500,7 @@ def _review(
     if not result.pop("_context_checked", False):
         _check_inspection_context(request, context, adapter)
     timings["completion"] = perf_counter() - stage_started
+    _profile_stage("graph")
     stage_started = perf_counter()
     result = {
         "source": source,
@@ -523,6 +529,7 @@ def _prepare_review(request, snapshot, edits, context, adapter):
     result = adapter.review(
         snapshot["source"], edits, snapshot["path"], _github_token(request)
     )
+    _profile_stage("completion")
     _check_inspection_context(request, context, adapter)
     result["_context_checked"] = True
     return result

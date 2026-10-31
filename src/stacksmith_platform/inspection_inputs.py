@@ -2,6 +2,7 @@ import hashlib
 import json
 import re
 from concurrent.futures import ThreadPoolExecutor
+from contextvars import copy_context
 from functools import partial
 from urllib.parse import quote, urlsplit
 
@@ -41,9 +42,15 @@ def prepare_inputs(request, context):
             references.add((f"https://github.com/{match[1]}/{match[2]}", match[4]))
         references.update(_git_sources(_catalog_configuration(content)))
     with ThreadPoolExecutor(max_workers=4) as executor:
+        pending = [
+            executor.submit(
+                copy_context().run, partial(_resolve_reference, client), reference
+            )
+            for reference in sorted(references)
+        ]
         for reference, revision in zip(
             sorted(references),
-            executor.map(partial(_resolve_reference, client), sorted(references)),
+            (future.result() for future in pending),
             strict=True,
         ):
             if revision is not None:
