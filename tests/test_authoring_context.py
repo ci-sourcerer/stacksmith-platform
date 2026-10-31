@@ -1,7 +1,11 @@
 import json
+from functools import partial
+from importlib.metadata import version
+from pathlib import Path
 from unittest.mock import Mock
 
 import pytest
+from ruamel.yaml import YAML
 from test_access import _grant
 from test_control import CONFIG, SHA, _login
 from test_control import platform as _platform_fixture
@@ -9,6 +13,83 @@ from test_control import platform as _platform_fixture
 from stacksmith_platform.app import _github
 from stacksmith_platform.database import environments, row
 from stacksmith_platform.errors import ComposerError
+
+
+def _warm_context(platform, snapshot, monkeypatch):
+    from conftest import CATALOG
+
+    snapshot.update(
+        principal="admin",
+        source=json.dumps(
+            {"name": "test", "components": {"policy": {"type": "aws_iam_policy"}}}
+        ),
+    )
+    preparation = Mock(
+        return_value={
+            "source": snapshot["source"],
+            "catalog": CATALOG,
+            "associations": {"rules": [], "applications": []},
+            "_editing_context": {
+                "resolver_version": version("stacksmith"),
+                "config": YAML(typ="safe").load(
+                    Path(__file__).resolve().parents[1] / "examples/platform.yaml"
+                ),
+            },
+        }
+    )
+    monkeypatch.setattr(
+        "stacksmith_platform.adapter.StacksmithAdapter.review", preparation
+    )
+    assert (
+        platform.client.post(
+            "/api/review",
+            json={
+                "snapshot": "signed",
+                "components": json.loads(snapshot["source"])["components"],
+            },
+        ).status_code
+        == 200
+    )
+    return preparation
+
+
+def _change_access_after_resolution(monkeypatch, original, change, *args):
+    result = original(*args)
+    if change == "access":
+        monkeypatch.setattr(
+            "test_control.UserGitHub.repositories", Mock(return_value=[])
+        )
+    else:
+        monkeypatch.setattr(
+            "stacksmith_platform.app._config_revision", Mock(return_value="changed")
+        )
+    return result
+
+
+@pytest.mark.parametrize(
+    ("change", "status"), [("access", 403), ("configuration", 409)]
+)
+def test_warm_reviews_recheck_access_and_configuration_after_resolution(
+    platform, snapshot, monkeypatch, change, status
+):
+    from stacksmith_platform.editing_contexts import _resolve
+
+    preparation = _warm_context(platform, snapshot, monkeypatch)
+    monkeypatch.setattr(
+        "stacksmith_platform.editing_contexts._resolve",
+        partial(_change_access_after_resolution, monkeypatch, _resolve, change),
+    )
+    response = platform.client.post(
+        "/api/review",
+        json={
+            "snapshot": "signed",
+            "components": {
+                "policy": {"type": "aws_iam_policy", "properties": {"name": "updated"}}
+            },
+        },
+    )
+    assert response.status_code == status, response.text
+    assert preparation.call_count == 1
 
 
 @pytest.fixture(name="platform")
@@ -22,6 +103,7 @@ def snapshot(platform, monkeypatch):
         {"name": "test", "components": {"database": {"type": "database"}}}
     )
     snapshot = {
+        "principal": "operator",
         "repository": "acme/service",
         "head": SHA,
         "path": "stack.yaml",
@@ -30,10 +112,15 @@ def snapshot(platform, monkeypatch):
     }
     monkeypatch.setattr("stacksmith_platform.app._snapshot", lambda *args: snapshot)
     monkeypatch.setattr(
-        "stacksmith_platform.app._draft_source", lambda *args: (snapshot, source)
+        "stacksmith_platform.app._draft_source",
+        lambda *args, **kwargs: (snapshot, source),
     )
     monkeypatch.setattr(
         "stacksmith_platform.app._config_revision", lambda *args: "configuration"
+    )
+    monkeypatch.setattr(
+        "stacksmith_platform.app._managed_layers",
+        lambda *args: [("local.yaml", "{}", "configuration")],
     )
     return snapshot
 
@@ -232,7 +319,7 @@ def test_targeted_review_preserves_filter_and_subset_synchronization(
     monkeypatch.setattr(
         UserGitHub,
         "repositories",
-        lambda self, repository=None: [
+        lambda self, repository=None, installation_id=None: [
             {
                 "name": "acme/service",
                 "github_id": "1",
@@ -367,7 +454,7 @@ def test_review_and_pr_each_submit_a_fresh_compound_job(
 ):
     monkeypatch.setattr(
         "stacksmith_platform.inspection.InspectionQueue.__init__",
-        lambda self, settings: None,
+        lambda self, settings, database=None: None,
     )
     queued = Mock(
         return_value=json.dumps(

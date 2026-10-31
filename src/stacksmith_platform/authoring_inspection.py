@@ -47,6 +47,7 @@ def _review(inspection):
     from stacksmith.authoring import StackEdit, author_stack
 
     timings = {}
+    cache_proof = {}
     with _stage(timings, "authoring"):
         proposal = author_stack(
             inspection["authoring_request"]["source"],
@@ -58,7 +59,10 @@ def _review(inspection):
         )
         load_document(proposal.source)
     with _stage(timings, "environment"):
-        inputs = _inspection_inputs({**inspection, "source": proposal.source})
+        inputs = _inspection_inputs(
+            {**inspection, "source": proposal.source}, cache_proof
+        )
+        _pin_configuration(inputs, inspection)
     with _stage(timings, "catalog"):
         catalog = _catalog(inputs)
     with _stage(timings, "associations"):
@@ -68,7 +72,36 @@ def _review(inspection):
         "catalog": catalog,
         "associations": associations,
         "timings": timings,
+        "_editing_context": _editing_context(inputs)
+        if cache_proof.get("static")
+        else None,
     }
+
+
+def _editing_context(inputs):
+    from .editing_contexts import prepare_editing_context
+
+    return prepare_editing_context(inputs)
+
+
+def _pin_configuration(inputs, inspection):
+    if not (manifest := (inspection.get("context") or {}).get("_input_manifest")):
+        return
+    from ruamel.yaml import YAML
+    from stacksmith.remote import resolve_references
+
+    from .inspection_inputs import rewrite_dependencies
+
+    inputs["config"] = resolve_references(
+        [manifest["configs"].get(str(value), value) for value in inputs["config"]],
+        Path(".stacksmith/.cache"),
+    )
+    for path in inputs["config"]:
+        parser = YAML(typ="rt")
+        document = parser.load(Path(path))
+        rewrite_dependencies(document, manifest["revisions"])
+        with Path(path).open("w") as output:
+            parser.dump(document, output)
 
 
 def _standalone_inputs(inspection, source):
@@ -85,13 +118,15 @@ def _standalone_inputs(inspection, source):
     }
 
 
-def _inspection_inputs(inspection):
+def _inspection_inputs(inspection, cache_proof=None):
     if (inspection.get("context") or {}).get("environment"):
-        return _environment_inputs(inspection)
+        return _environment_inputs(inspection, cache_proof)
+    if cache_proof is not None:
+        cache_proof["static"] = True
     return _standalone_inputs(inspection, inspection["source"])
 
 
-def _environment_inputs(inspection):
+def _environment_inputs(inspection, cache_proof=None):
     from stacksmith.ci.service import inspect_environments
     from stacksmith.loading import load_runfiles
     from stacksmith.models import MergePolicy, RunFile
@@ -123,6 +158,10 @@ def _environment_inputs(inspection):
             ]
         )
     )
+    if cache_proof is not None:
+        cache_proof["static"] = bool(rows[0].get("stack")) and not (
+            runfile.configs or runfile.vars
+        )
     paths = (
         [Path(rows[0]["stack"])]
         if rows[0].get("stack")

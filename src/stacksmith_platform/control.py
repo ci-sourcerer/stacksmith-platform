@@ -408,13 +408,20 @@ def administrator[**P, R](
 
 
 def _repository_access(
-    request, identity, repository, environment="*", permission="view"
+    request,
+    identity,
+    repository,
+    environment="*",
+    permission="view",
+    *,
+    github_checked=False,
 ):
     if not re.fullmatch(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+", repository):
         raise ComposerError("Invalid repository name.", 422)
-    GitHubClient(identity["github"], request.app.state.github_transport)._repository(
-        *repository.split("/")
-    )
+    if not github_checked:
+        GitHubClient(
+            identity["github"], request.app.state.github_transport
+        )._repository(*repository.split("/"))
     if identity["scope"]:
         scope = identity["scope"]
         action, _, workload = permission.partition("_")

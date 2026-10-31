@@ -18,6 +18,9 @@ migrationDatabaseSecret: stacksmith-platform-migration-database
 executionNamespace: stacksmith-runs
 executionServiceAccount: stacksmith-execution
 apiReplicas: 1
+clusterDomain: cluster.local
+databasePoolSize: 5
+databasePoolTimeout: 5
 frontendReplicas: 1
 resources:
   frontend:
@@ -30,7 +33,8 @@ supervisor:
   cpu: "1"
   memory: 1Gi
 inspectionWaitTimeout: 180
-inspectionPollInterval: 0.25
+inspectionPollInterval: 2
+reviewProfiling: false
 recovery:
   resources:
     requests: {cpu: 100m, memory: 256Mi}

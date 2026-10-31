@@ -57,7 +57,7 @@ def test_chart_uses_temporary_supervisors_and_bounded_recovery():
     for container in (api["containers"][0], recovery["containers"][0]):
         assert {
             "name": "STACKSMITH_PLATFORM_INSPECTION_POLL_INTERVAL",
-            "value": "0.25",
+            "value": "2",
         } in container["env"]
     assert (
         recovery["containers"][0]["envFrom"][1]["secretRef"]["name"]
@@ -101,7 +101,10 @@ def test_frontend_owns_ingress_without_receiving_api_secrets():
     container = frontend["containers"][0]
     assert "envFrom" not in container
     assert container["env"] == [
-        {"name": "API_UPSTREAM", "value": "http://test-api.control.svc:8000"}
+        {
+            "name": "API_UPSTREAM",
+            "value": "http://test-api.control.svc.cluster.local:8000",
+        }
     ]
     assert container["securityContext"]["readOnlyRootFilesystem"]
     assert container["readinessProbe"]["httpGet"]["path"] == "/api/ready"
@@ -158,3 +161,24 @@ def test_schema_hook_upgrades_and_grants_before_application_startup():
         container["envFrom"][1]["secretRef"]["name"]
         == "stacksmith-platform-migration-database"
     )
+
+
+def test_review_profiling_is_opt_in():
+    for arguments, expected in (
+        ((), "false"),
+        (("--set", "reviewProfiling=true"), "true"),
+    ):
+        deployment = next(
+            item
+            for item in _render(*arguments)
+            if item["kind"] == "Deployment" and item["metadata"]["name"] == "test-api"
+        )
+        environment = deployment["spec"]["template"]["spec"]["containers"][0]["env"]
+        assert (
+            next(
+                item["value"]
+                for item in environment
+                if item["name"] == "STACKSMITH_PLATFORM_REVIEW_PROFILING"
+            )
+            == expected
+        )

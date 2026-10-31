@@ -29,6 +29,7 @@ from .database import (
     execution_credential_sessions,
     locks,
     phase_claims,
+    prepared_contexts,
     repositories,
     row,
     runs,
@@ -1194,6 +1195,11 @@ class RunReconciler:
 
     def _purge(self):
         with self.database.transaction() as connection:
+            connection.execute(
+                prepared_contexts.delete().where(
+                    prepared_contexts.c.expires <= time.time()
+                )
+            )
             self._expire_metadata(connection, private=True)
             self._expire_metadata(connection, private=False)
             expired = (
@@ -1376,7 +1382,7 @@ def main() -> None:
     with closing(GitHubTransport()) as transport:
         worker = Worker(
             settings,
-            Database(settings.database_url, settings.secret_key),
+            Database.from_settings(settings, pool_size=1),
             execution_driver(settings),
             artifact_storage(settings),
             GitHubProvider(settings, transport),

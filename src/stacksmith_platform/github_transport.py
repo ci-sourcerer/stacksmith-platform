@@ -1,11 +1,16 @@
+import hashlib
 import json
 import os
+import random
 import ssl
+import time
+from collections import OrderedDict
 from contextlib import ExitStack
 from dataclasses import dataclass
 from functools import partial
 from threading import Lock
 from typing import Any
+from uuid import uuid4
 
 import aiohttp
 import anyio
@@ -13,6 +18,7 @@ import certifi
 from anyio.from_thread import start_blocking_portal
 
 from .errors import ComposerError
+from .review_profiling import _capture
 
 
 @dataclass(frozen=True)
@@ -65,6 +71,10 @@ class GitHubTransport:
         self._portal = None
         self._session = None
         self._closed = False
+        self.request_count = 0
+        self.conditional_hits = 0
+        self.counter_id = uuid4().hex
+        self._conditional = OrderedDict()
 
     def request(self, method: str, path: str, **kwargs) -> GitHubResponse:
         """Perform a request using the process's shared connection pool.
@@ -84,16 +94,17 @@ class GitHubTransport:
         with self._lock:
             if self._closed:
                 raise RuntimeError("GitHub transport is closed")
+            self.request_count += 1
             if self._portal is None:
                 self._portal = self._lifecycle.enter_context(
                     start_blocking_portal(name="github-http")
                 )
             pending = self._portal.start_task_soon(
-                partial(self._request, method, path, **kwargs)
+                partial(self._request, method, path, _profile=_capture(), **kwargs)
             )
         return pending.result()
 
-    async def _request(self, method, path, **kwargs):
+    async def _request(self, method, path, _profile=(None, None), **kwargs):
         if self._session is None:
             self._session = aiohttp.ClientSession(
                 base_url=self._base_url,
@@ -110,16 +121,103 @@ class GitHubTransport:
                 trust_env=True,
             )
         try:
-            async with self._session.request(
-                method, path, allow_redirects=False, **kwargs
-            ) as response:
-                return GitHubResponse(response.status, await response.read())
+            with anyio.fail_after(20):
+                return await self._retry_request(method, path, _profile, kwargs)
         except (aiohttp.ClientError, TimeoutError) as exc:
             raise ComposerError(
                 "GitHub is temporarily unreachable. Please retry.", 502
             ) from exc
 
+    async def _retry_request(self, method, path, profile, kwargs):
+        try:
+            response, retryable = await self._attempt(method, path, profile, kwargs)
+        except aiohttp.ClientSSLError, aiohttp.ServerFingerprintMismatch:
+            raise
+        except aiohttp.ClientConnectionError, aiohttp.ClientPayloadError, TimeoutError:
+            if method != "GET":
+                raise
+        else:
+            if method != "GET" or not retryable:
+                return response
+        await anyio.sleep(random.uniform(0.1, 0.3))
+        response, _ = await self._attempt(method, path, profile, kwargs, retried=True)
+        return response
+
+    async def _attempt(self, method, path, profile, kwargs, *, retried=False):
+        key = _conditional_key(method, path, kwargs)
+        cached = self._conditional.get(key)
+        if cached and time.monotonic() - cached[2] >= 300:
+            self._conditional.pop(key, None)
+            cached = None
+        if cached:
+            kwargs = {
+                **kwargs,
+                "headers": {**kwargs.get("headers", {}), "If-None-Match": cached[0]},
+            }
+        started = time.perf_counter()
+        status = None
+        outcome = "network"
+        try:
+            async with self._session.request(
+                method, path, allow_redirects=False, **kwargs
+            ) as response:
+                content = await response.read()
+                status = response.status
+                outcome = str(status)
+                return self._conditional_response(
+                    key,
+                    cached,
+                    GitHubResponse(status, content),
+                    response.headers.get("etag"),
+                ), (
+                    status in {500, 502, 503, 504}
+                    and "Retry-After" not in response.headers
+                    and response.headers.get("X-RateLimit-Remaining") != "0"
+                )
+        except TimeoutError:
+            outcome = "timeout"
+            raise
+        except anyio.get_cancelled_exc_class():
+            outcome = "cancelled"
+            raise
+        finally:
+            if profile[0] is not None:
+                profile[0]._observe(
+                    profile[1],
+                    path,
+                    time.perf_counter() - started,
+                    status,
+                    key if not retried else None,
+                    retried=retried,
+                    outcome=outcome,
+                )
+
+    def _conditional_response(self, key, cached, response, etag):
+        if response.status_code == 304:
+            if not cached:
+                return response
+            self.conditional_hits += 1
+            response, etag = cached[1], etag or cached[0]
+        if (
+            key
+            and response.status_code == 200
+            and etag
+            and len(response.content) <= 512 * 1024
+        ):
+            self._conditional[key] = (etag, response, time.monotonic())
+            self._conditional.move_to_end(key)
+            while (
+                len(self._conditional) > 128
+                or sum(len(entry[1].content) for entry in self._conditional.values())
+                > 4 * 1024**2
+            ):
+                self._conditional.popitem(last=False)
+        elif key:
+            self._conditional.pop(key, None)
+        return response
+
     async def _close_session(self):
+        self._conditional.clear()
         if self._session is not None:
             await self._session.close()
             # Allow TLS transports to close before stopping their event loop.
@@ -140,3 +238,21 @@ class GitHubTransport:
                     self._portal.call(self._close_session)
             finally:
                 self._lifecycle.close()
+
+
+def _conditional_key(method, path, options):
+    headers = {
+        name.lower(): value for name, value in options.get("headers", {}).items()
+    }
+    if (
+        method != "GET"
+        or not headers.get("authorization")
+        or "if-none-match" in headers
+        or "if-modified-since" in headers
+    ):
+        return None
+    return hashlib.sha256(
+        json.dumps(
+            [path, options.get("params"), headers], sort_keys=True, default=str
+        ).encode()
+    ).hexdigest()

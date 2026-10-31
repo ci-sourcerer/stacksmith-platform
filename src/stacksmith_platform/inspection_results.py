@@ -1,6 +1,9 @@
 import json
 import re
 import subprocess
+from typing import Any, Literal
+
+from pydantic import BaseModel, ConfigDict, ValidationError
 
 from .errors import ComposerError
 
@@ -82,8 +85,6 @@ def _run_inspection(command, *, stage, authoring=False, redactions=(), **options
             redactions=redactions,
         )
     if authoring:
-        from .adapter import _authoring_response
-
         try:
             output = json.dumps(_authoring_response(result))
         except ComposerError as exc:
@@ -119,3 +120,39 @@ def _raise_inspection_failure(result):
             diagnostics.get("status", 422),
             diagnostics or None,
         )
+
+
+class _AuthoringProposal(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    version: Literal[1]
+    validation: Literal["document"]
+    source: str
+    diff: str
+    changed: bool
+
+
+def _authoring_response(result: subprocess.CompletedProcess[str]) -> dict[str, Any]:
+    if result.returncode:
+        try:
+            response = json.loads(result.stdout)
+        except json.JSONDecodeError as exc:
+            raise ComposerError(
+                "Stacksmith must support the version 1 authoring CLI.", 502
+            ) from exc
+        if (
+            isinstance(response, dict)
+            and response.get("version") == 1
+            and isinstance(response.get("error"), dict)
+            and response["error"].get("code") == "invalid_document"
+        ):
+            raise ComposerError(
+                "Stacksmith rejected this authored document. Review its source and field values."
+            )
+        raise ComposerError("Stacksmith must support the version 1 authoring CLI.", 502)
+    try:
+        return _AuthoringProposal.model_validate_json(result.stdout).model_dump()
+    except ValidationError as exc:
+        raise ComposerError(
+            "Stacksmith returned an incompatible authoring response.", 502
+        ) from exc

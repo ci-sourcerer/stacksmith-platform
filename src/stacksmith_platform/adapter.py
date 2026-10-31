@@ -2,14 +2,11 @@ import json
 import logging
 import os
 import shutil
-import subprocess
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from threading import BoundedSemaphore
-from typing import Any, Literal
+from typing import Any
 from urllib.parse import parse_qs, quote, urlparse
-
-from pydantic import BaseModel, ConfigDict, ValidationError
 
 from .certificates import ca_environment
 from .configuration import config_arguments
@@ -26,11 +23,13 @@ class StacksmithAdapter:
     Args:
         settings: Administrator-owned command and managed configuration settings.
         context: Server-selected repository and environment inspection context.
+        database: Process-owned query pool shared with the API.
     """
 
-    def __init__(self, settings: Settings, context: dict | None = None):
+    def __init__(self, settings: Settings, context: dict | None = None, database=None):
         self.settings = settings
         self.context = context
+        self.database = database
         self.slots = BoundedSemaphore(2)
         self.command = shutil.which(settings.stacksmith_command)
         if self.command:
@@ -64,7 +63,7 @@ class StacksmithAdapter:
         if self.settings.execution_enabled:
             from .inspection import InspectionQueue
 
-            return InspectionQueue(self.settings).execute(
+            return InspectionQueue(self.settings, database=self.database).execute(
                 args,
                 source,
                 github_token,
@@ -126,7 +125,7 @@ class StacksmithAdapter:
     def author(
         self, source: str, edits: list[dict[str, Any]], path: str
     ) -> dict[str, Any]:
-        """Propose authored edits through the separately installed Stacksmith CLI.
+        """Propose authored edits through the pinned Stacksmith library.
 
         Args:
             source: Original authored stack source.
@@ -137,19 +136,11 @@ class StacksmithAdapter:
             Version 1 document-validated source, diff, and change indicator.
 
         Raises:
-            ComposerError: If the CLI is unavailable or rejects the request.
+            ComposerError: The document or edits are invalid.
         """
-        return json.loads(
-            self._run(
-                ["author"],
-                authoring_request={
-                    "version": 1,
-                    "source": source,
-                    "edits": edits,
-                    "path": path,
-                },
-            )
-        )
+        from .editing_contexts import author_source
+
+        return author_source(source, edits, path)
 
     def catalog(self, github_token: str | None = None) -> dict[str, Any]:
         """Return module inspection metadata from the configured Stacksmith CLI.
@@ -248,42 +239,6 @@ class StacksmithAdapter:
             source,
             github_token,
         )
-
-
-class _AuthoringProposal(BaseModel):
-    model_config = ConfigDict(extra="forbid", strict=True)
-
-    version: Literal[1]
-    validation: Literal["document"]
-    source: str
-    diff: str
-    changed: bool
-
-
-def _authoring_response(result: subprocess.CompletedProcess[str]) -> dict[str, Any]:
-    if result.returncode:
-        try:
-            response = json.loads(result.stdout)
-        except json.JSONDecodeError as exc:
-            raise ComposerError(
-                "Stacksmith must support the version 1 authoring CLI.", 502
-            ) from exc
-        if (
-            isinstance(response, dict)
-            and response.get("version") == 1
-            and isinstance(response.get("error"), dict)
-            and response["error"].get("code") == "invalid_document"
-        ):
-            raise ComposerError(
-                "Stacksmith rejected this authored document. Review its source and field values."
-            )
-        raise ComposerError("Stacksmith must support the version 1 authoring CLI.", 502)
-    try:
-        return _AuthoringProposal.model_validate_json(result.stdout).model_dump()
-    except ValidationError as exc:
-        raise ComposerError(
-            "Stacksmith returned an incompatible authoring response.", 502
-        ) from exc
 
 
 def _subprocess_environment(github_token: str | None) -> dict[str, str]:

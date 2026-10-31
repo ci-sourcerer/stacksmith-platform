@@ -92,15 +92,8 @@ it("marks the initial diagram incomplete and clears the blur and announcement on
   expect(
     container.querySelector('[data-testid="flow"]')?.getAttribute("aria-busy"),
   ).toBe("true");
-  expect(
-    container.querySelector(".canvas.is-loading-connections"),
-  ).toBeTruthy();
-  expect(container.querySelector('[role="status"]')?.textContent).toContain(
-    "Loading managed connections",
-  );
-  expect(container.querySelector('[role="status"]')?.textContent).toContain(
-    "Connections will appear when ready",
-  );
+  expect(container.querySelector(".canvas.is-loading-connections")).toBeNull();
+  expect(container.querySelector(".managed-connection-loading")).toBeNull();
   await render({ inspecting: false, hasInspectedAssociations: true });
   expect(
     container.querySelector('[data-testid="flow"]')?.getAttribute("aria-busy"),

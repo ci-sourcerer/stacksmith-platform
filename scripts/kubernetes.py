@@ -180,11 +180,19 @@ def _configuration(
 def _resources(values: dict[str, str], credentials: dict[str, str]) -> list[dict]:
     postgres = {
         "name": POSTGRES,
-        "image": "postgres:18-alpine",
+        "image": values.get("STACKSMITH_PLATFORM_MINIKUBE_POSTGRES_IMAGE")
+        or "postgres:18-alpine",
+        "env": [
+            {
+                "name": "PGDATA",
+                "value": values.get("STACKSMITH_PLATFORM_MINIKUBE_POSTGRES_PGDATA")
+                or "/var/lib/postgresql/18/docker",
+            }
+        ],
         "envFrom": [{"secretRef": {"name": "stacksmith-local-postgres"}}],
         "ports": [{"containerPort": 5432}],
         "readinessProbe": {
-            "exec": {"command": ["pg_isready", "-U", "postgres", "-d", "platform"]}
+            "exec": {"command": ["pg_isready", "-U", "platform", "-d", "platform"]}
         },
         "volumeMounts": [{"name": "init", "mountPath": "/docker-entrypoint-initdb.d"}],
     }
@@ -204,7 +212,11 @@ def _resources(values: dict[str, str], credentials: dict[str, str]) -> list[dict
         "readinessProbe": {"tcpSocket": {"port": 9000}, "periodSeconds": 5},
     }
     database = _deployment(
-        POSTGRES, postgres, f"{POSTGRES}-data", "/var/lib/postgresql"
+        POSTGRES,
+        postgres,
+        values.get("STACKSMITH_PLATFORM_MINIKUBE_POSTGRES_VOLUME")
+        or f"{POSTGRES}-data",
+        "/var/lib/postgresql",
     )
     database["spec"]["template"]["spec"]["volumes"].append(
         {"name": "init", "configMap": {"name": "stacksmith-database-init"}}
@@ -246,7 +258,10 @@ def _resources(values: dict[str, str], credentials: dict[str, str]) -> list[dict
                 or "stacksmith-platform",
             },
         ),
-        _volume(f"{POSTGRES}-data"),
+        _volume(
+            values.get("STACKSMITH_PLATFORM_MINIKUBE_POSTGRES_VOLUME")
+            or f"{POSTGRES}-data"
+        ),
         _volume(f"{STORAGE}-data"),
         database,
         _deployment(STORAGE, storage, f"{STORAGE}-data", "/data"),
@@ -407,7 +422,8 @@ def up() -> None:
         values.get("STACKSMITH_PLATFORM_FRONTEND_IMAGE")
         or "stacksmith-platform-frontend:local",
         "stacksmith-platform-execution:local",
-        "postgres:18-alpine",
+        values.get("STACKSMITH_PLATFORM_MINIKUBE_POSTGRES_IMAGE")
+        or "postgres:18-alpine",
         "chrislusf/seaweedfs:4.48",
     ):
         print(f"Loading {image} into Minikube", flush=True)

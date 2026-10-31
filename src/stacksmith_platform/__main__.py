@@ -19,6 +19,7 @@ def main() -> None:
     uvicorn.run(
         "stacksmith_platform.app:create_app",
         factory=True,
+        workers=1,
         host=args.host,
         port=args.port,
         reload=args.reload,

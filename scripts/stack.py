@@ -86,18 +86,15 @@ def _clear_debug():
     _DOCKERFILE.unlink(missing_ok=True)
 
 
-def _foreground(debug, services=()):
+def _foreground(debug, services=(), no_rebuild=False):
     status = 0
+    up_args = ["--force-recreate", *([] if services else ["--remove-orphans"]), *services]
+    if debug:
+        up_args.insert(0, "--watch")
+    if no_rebuild:
+        up_args.insert(0, "--no-build")
     try:
-        status = _run(
-            "up",
-            *(["--watch"] if debug else ["--no-build"]),
-            "--force-recreate",
-            *([] if services else ["--remove-orphans"]),
-            *services,
-            debug=debug,
-            check=False,
-        ).returncode
+        status = _run("up", *up_args, debug=debug, check=False).returncode
     except KeyboardInterrupt:
         status = 130
     finally:
@@ -105,7 +102,7 @@ def _foreground(debug, services=()):
         # finish even when the foreground command was interrupted.
         previous_handler = signal.signal(signal.SIGINT, signal.SIG_IGN)
         try:
-            cleanup_status = _run(
+            cleanup_result = _run(
                 "rm",
                 "--force",
                 "--stop",
@@ -113,7 +110,14 @@ def _foreground(debug, services=()):
                 *services,
                 debug=debug,
                 check=False,
-            ).returncode
+                capture_output=True,
+            )
+            cleanup_status = cleanup_result.returncode
+            if cleanup_status != 0:
+                if cleanup_result.stdout:
+                    print(cleanup_result.stdout, file=sys.stdout)
+                if cleanup_result.stderr:
+                    print(cleanup_result.stderr, file=sys.stderr)
         finally:
             signal.signal(signal.SIGINT, previous_handler)
             _clear_debug()
@@ -124,14 +128,16 @@ def up(
     debug: bool = False,
     detach: bool = False,
     no_cache: bool = False,
+    no_rebuild: bool = False,
     services: list[str] | None = None,
 ) -> None:
-    """Build and start every service in the local platform stack.
+    """Build or reuse local images, then start the platform stack.
 
     Args:
         debug: Enable Python debugging and frontend development; watch when attached.
         detach: Start in the background and wait for healthy services.
         no_cache: Disable image build caches.
+        no_rebuild: Reuse the current local images instead of rebuilding them.
         services: Selected services and their dependencies; all services by default.
 
     Returns:
@@ -144,18 +150,22 @@ def up(
     """
     configure.check()
     services = _selected_services(services, debug)
-    if not services or set(services).intersection(
-        {"api", "worker", "migrate", "database-grants", "storage-init"}
-    ):
-        images.platform(no_cache=no_cache)
-    if not services or "frontend" in services:
-        images.frontend(debug=debug, no_cache=no_cache)
-    if not services or set(services).intersection({"api", "worker"}):
-        build_execution.main(no_cache=no_cache)
+    if no_rebuild:
+        print("Reusing current local images; skipping stack-up rebuilds.")
+    else:
+        if not services or set(services).intersection(
+            {"api", "worker", "migrate", "database-grants", "storage-init"}
+        ):
+            images.platform(no_cache=no_cache)
+        if not services or "frontend" in services:
+            images.frontend(debug=debug, no_cache=no_cache)
+        if not services or set(services).intersection({"api", "worker"}):
+            build_execution.main(no_cache=no_cache)
     if debug:
         if not services or set(services).intersection({"api", "worker"}):
-            _DOCKERFILE.parent.mkdir(exist_ok=True)
-            _DOCKERFILE.write_text(images.platform(debug=True, no_cache=no_cache))
+            if not no_rebuild:
+                _DOCKERFILE.parent.mkdir(exist_ok=True)
+                _DOCKERFILE.write_text(images.platform(debug=True, no_cache=no_cache))
         _MODE.parent.mkdir(exist_ok=True)
         _MODE.touch()
     else:
@@ -165,14 +175,14 @@ def up(
             "up",
             "--detach",
             "--wait",
-            "--no-build",
+            *( ["--no-build"] if no_rebuild else [] ),
             "--force-recreate",
             *([] if services else ["--remove-orphans"]),
             *services,
             debug=debug,
         )
     else:
-        _foreground(debug, services)
+        _foreground(debug, services, no_rebuild)
 
 
 def down() -> None:

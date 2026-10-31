@@ -66,6 +66,7 @@ import { ConnectionDestination } from "./components/ConnectionDestination";
 import { useConfirmation } from "./components/Dialogs";
 import { useAuthoredGraph } from "./useAuthoredGraph";
 import { useDraftReview } from "./useDraftReview";
+import { useConfigurationEvents } from "./useConfigurationEvents";
 import {
   canRestore,
   parseRecovery,
@@ -343,7 +344,12 @@ export default function App() {
   }
 
   const editable = snapshot?.editable ?? false;
-  const canEdit = editable && !viewOnly && !openingStack;
+  const canEdit =
+    editable &&
+    !viewOnly &&
+    !openingStack &&
+    reviewContext === inspectionContextKey &&
+    Boolean(review);
   useEffect(() => {
     setPendingConnection(undefined);
   }, [canEdit, location.pathname, view]);
@@ -468,8 +474,7 @@ export default function App() {
   }, [inspectionContextKey]);
 
   useEffect(() => {
-    if (loading || !session || (session.mode === "github" && !session.login))
-      return;
+    if (!session || (session.mode === "github" && !session.login)) return;
     if (!route.stack) {
       setOpeningStack(false);
       if (session.mode === "demo") {
@@ -495,12 +500,19 @@ export default function App() {
         if (!abort.signal.aborted) setOpeningStack(false);
       });
     return () => abort.abort();
-  }, [loading, session, route.stack]);
+  }, [session, route.stack]);
 
   const draftReview = useDraftReview(
     semanticKey,
     Boolean(snapshot?.editable),
     inspectionAttempt,
+    reviewContext !== inspectionContextKey || !review,
+  );
+  useConfigurationEvents(
+    Boolean(session.execution_enabled && snapshot?.editable),
+    snapshot,
+    setSnapshot,
+    (failure) => setError(errorMessage(failure)),
   );
 
   useEffect(() => {
@@ -590,6 +602,15 @@ export default function App() {
       setRendered({ key: sourceKey, source: snapshot.source, diff: "" });
       return;
     }
+    if (view !== "review") return;
+    if (
+      draftReview.result?.key === semanticKey &&
+      Object.keys(positions).length === 0 &&
+      routes.length === 0
+    ) {
+      setRendered({ key: sourceKey, ...draftReview.result.review });
+      return;
+    }
     const abort = new AbortController();
     const timer = setTimeout(() => {
       api<Pick<Review, "source" | "diff">>(
@@ -611,7 +632,17 @@ export default function App() {
       clearTimeout(timer);
       abort.abort();
     };
-  }, [snapshot?.editable, sourceKey, sourceAttempt, dirty]);
+  }, [
+    snapshot?.editable,
+    sourceKey,
+    sourceAttempt,
+    dirty,
+    view,
+    draftReview.result,
+    semanticKey,
+    positions,
+    routes,
+  ]);
 
   useEffect(
     () => registerGuard(confirmStackChange),
@@ -1124,6 +1155,19 @@ export default function App() {
           onDismiss={() => setError("")}
         />
       )}
+      {validationError &&
+        (reviewContext !== inspectionContextKey || !review) && (
+          <div role="alert" className="notice error-text">
+            {validationError}{" "}
+            <button
+              className="text-button"
+              onClick={() => setInspectionAttempt((attempt) => attempt + 1)}
+            >
+              Retry inspection
+            </button>
+          </div>
+        )}
+
       {loading || openingStack ? (
         <main className="empty-state">
           <LoaderCircle className="spin" size={28} />

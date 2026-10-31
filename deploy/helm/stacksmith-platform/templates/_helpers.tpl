@@ -1,5 +1,7 @@
 {{- define "stacksmith.executionEnv" -}}
 - {name: STACKSMITH_PLATFORM_EXECUTION_ENABLED, value: "true"}
+- {name: STACKSMITH_PLATFORM_DATABASE_POOL_SIZE, value: {{ .Values.databasePoolSize | quote }}}
+- {name: STACKSMITH_PLATFORM_DATABASE_POOL_TIMEOUT, value: {{ .Values.databasePoolTimeout | quote }}}
 - {name: STACKSMITH_PLATFORM_SUPERVISION_MODE, value: kubernetes-jobs}
 - {name: STACKSMITH_PLATFORM_RUNNER, value: kubernetes}
 - {name: STACKSMITH_PLATFORM_EXECUTION_IMAGE, value: {{ .Values.executionImage | quote }}}
@@ -21,4 +23,5 @@
 - {name: STACKSMITH_PLATFORM_SUPERVISOR_MEMORY, value: {{ .Values.supervisor.memory | quote }}}
 - {name: STACKSMITH_PLATFORM_INSPECTION_WAIT_TIMEOUT, value: {{ .Values.inspectionWaitTimeout | quote }}}
 - {name: STACKSMITH_PLATFORM_INSPECTION_POLL_INTERVAL, value: {{ .Values.inspectionPollInterval | quote }}}
+- {name: STACKSMITH_PLATFORM_REVIEW_PROFILING, value: {{ .Values.reviewProfiling | quote }}}
 {{- end -}}

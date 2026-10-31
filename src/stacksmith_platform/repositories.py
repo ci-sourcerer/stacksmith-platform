@@ -1,3 +1,5 @@
+from threading import Lock
+
 from sqlalchemy import or_
 
 from .database import (
@@ -8,10 +10,13 @@ from .database import (
     grants,
     locks,
     repositories,
+    row,
     runs,
     secrets,
     tokens,
 )
+
+_CATALOG_LOCK = Lock()
 
 
 def _rename(connection, previous, name):
@@ -76,6 +81,27 @@ def _rename(connection, previous, name):
     )
 
 
+def _repository_values(repository):
+    return {
+        "github_id": str(repository["id"]),
+        "installation": repository["installation_id"],
+        "branch": repository.get("default_branch", "main"),
+        "enabled": 1,
+    }
+
+
+def _catalog_unchanged(database, catalog):
+    with database.transaction() as connection:
+        for repository in catalog:
+            stored = row(connection, repositories, repository["full_name"])
+            if not stored or any(
+                stored[key] != value
+                for key, value in _repository_values(repository).items()
+            ):
+                return False
+    return True
+
+
 def _upsert(connection, repository):
     name = repository["full_name"]
     identifier = str(repository["id"])
@@ -114,17 +140,12 @@ def _upsert(connection, repository):
             previous=previous["id"],
             repository=name,
         )
-    values = {
-        "github_id": identifier,
-        "installation": repository["installation_id"],
-        "branch": repository.get("default_branch", "main"),
-        "enabled": 1,
-    }
-    if previous:
+    values = _repository_values(repository)
+    if previous and any(previous[key] != value for key, value in values.items()):
         connection.execute(
             repositories.update().where(repositories.c.id == name).values(**values)
         )
-    else:
+    elif not previous:
         connection.execute(
             repositories.insert().values(
                 id=name, config="", deployment_enabled=0, **values
@@ -147,7 +168,11 @@ def synchronize(database, catalog, *, complete=False):
     Raises:
         sqlalchemy.exc.SQLAlchemyError: Repository synchronization cannot commit.
     """
-    with database.transaction() as connection:
+    catalog = list(catalog)
+    if not complete and catalog and _catalog_unchanged(database, catalog):
+        return
+    # Queue within this process before consuming a connection for the shared lock.
+    with _CATALOG_LOCK, database.transaction() as connection:
         if connection.dialect.name == "postgresql":
             connection.exec_driver_sql(
                 "SELECT pg_advisory_xact_lock(hashtext('github-repository-catalog'))"

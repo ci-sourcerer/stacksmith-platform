@@ -33,6 +33,19 @@ class _GitHubHandler(BaseHTTPRequestHandler):
         self._respond()
 
     def _respond(self):
+        if self.path == "/conditional":
+            if getattr(self.server, "denied", False):
+                self.send_response(403)
+            elif self.headers.get("If-None-Match") == getattr(
+                self.server, "etag", '"first"'
+            ):
+                self.send_response(304)
+            else:
+                self.send_response(200)
+            self.send_header("ETag", getattr(self.server, "etag", '"first"'))
+            self.send_header("Content-Length", "0")
+            self.end_headers()
+            return
         content = json.dumps(
             {
                 "authorization": self.headers.get("Authorization"),
@@ -140,6 +153,66 @@ def test_empty_response_has_no_json_payload():
         GitHubResponse(200, b"invalid").json()
 
 
+def test_conditional_requests_revalidate_each_credential(github_server):
+    with closing(GitHubTransport(github_server)) as transport:
+        assert (
+            transport.request(
+                "GET", "/conditional", headers={"Authorization": "Bearer first"}
+            ).status_code
+            == 200
+        )
+        assert (
+            transport.request(
+                "GET", "/conditional", headers={"Authorization": "Bearer first"}
+            ).status_code
+            == 200
+        )
+        assert transport.conditional_hits == 1
+        assert (
+            transport.request(
+                "GET", "/conditional", headers={"Authorization": "Bearer second"}
+            ).status_code
+            == 200
+        )
+        assert transport.conditional_hits == 1
+        assert transport.request_count == 3
+        assert all("Bearer" not in key for key in transport._conditional)
+
+
+def test_conditional_errors_evict_without_accepting_stale_content():
+    with closing(GitHubTransport()) as transport:
+        transport._conditional_response(
+            "key", None, GitHubResponse(200, b"old"), '"old"'
+        )
+        previous = transport._conditional["key"]
+        assert (
+            transport._conditional_response(
+                "key", previous, GitHubResponse(403, b"denied"), None
+            ).status_code
+            == 403
+        )
+        assert "key" not in transport._conditional
+        assert (
+            transport._conditional_response(
+                "key", previous, GitHubResponse(200, b"new"), '"new"'
+            ).content
+            == b"new"
+        )
+        assert transport._conditional["key"][0] == '"new"'
+
+
+def test_explicit_conditionals_and_unauthenticated_requests_bypass_cache(github_server):
+    with closing(GitHubTransport(github_server)) as transport:
+        transport.request("GET", "/conditional")
+        response = transport.request(
+            "GET",
+            "/conditional",
+            headers={"Authorization": "Bearer first", "If-None-Match": '"first"'},
+        )
+        assert response.status_code == 304
+        assert not transport._conditional
+
+
 def test_configured_ca_bundle_is_used(github_server, monkeypatch):
     from unittest.mock import Mock
 
@@ -153,3 +226,47 @@ def test_configured_ca_bundle_is_used(github_server, monkeypatch):
     with closing(GitHubTransport(github_server)) as transport:
         transport.request("GET", "/user")
     context.assert_called_once_with(cafile=certifi.where())
+
+
+def _profiled_requests(request):
+    from stacksmith_platform.review_profiling import _stage
+
+    request.transport.request(
+        "GET", "/conditional", headers={"Authorization": "Bearer secret"}
+    )
+    _stage("completion")
+    request.transport.request(
+        "GET", "/conditional", headers={"Authorization": "Bearer secret"}
+    )
+
+
+def test_profile_records_wire_conditional_hits(github_server, caplog):
+    import logging
+    from types import SimpleNamespace
+
+    from stacksmith_platform.review_profiling import profile_review
+
+    with closing(GitHubTransport(github_server)) as transport:
+        request = SimpleNamespace(
+            transport=transport,
+            headers={},
+            app=SimpleNamespace(
+                state=SimpleNamespace(
+                    settings=SimpleNamespace(review_profiling=True),
+                    github_transport=transport,
+                )
+            ),
+        )
+        with caplog.at_level(logging.INFO):
+            profile_review(_profiled_requests)(request)
+    event = json.loads(
+        next(
+            record.getMessage().split("REVIEW_PROFILE ")[1]
+            for record in caplog.records
+            if "REVIEW_PROFILE " in record.getMessage()
+        )
+    )
+    assert sum(item["count"] for item in event["github"]) == 2
+    assert sum(item["conditional_hits"] for item in event["github"]) == 1
+    assert {item["stage"] for item in event["github"]} == {"preflight", "completion"}
+    assert "secret" not in json.dumps(event)

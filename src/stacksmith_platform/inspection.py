@@ -17,11 +17,12 @@ class InspectionQueue:
 
     Args:
         settings: Managed configuration and execution settings.
+        database: Optional process-owned query pool.
     """
 
-    def __init__(self, settings):
+    def __init__(self, settings, database=None):
         self.settings = settings
-        self.database = Database(settings.database_url, settings.secret_key)
+        self.database = database or Database.from_settings(settings)
         self.dispatcher = (
             KubernetesDispatcher(settings, self.database)
             if settings.supervision_mode == "kubernetes-jobs"
@@ -57,7 +58,7 @@ class InspectionQueue:
                     environment="inspection",
                     revision="0" * 40,
                     action="inspection",
-                    actor="authoring",
+                    actor=(context or {}).get("actor", "authoring"),
                     status="queued",
                     phase=0,
                     supervision=requested_supervision(self.settings, "queued"),
@@ -73,7 +74,11 @@ class InspectionQueue:
                                     "authoring_request": authoring_request,
                                     "context": context,
                                     "config": str(self.settings.config),
-                                    "config_source": self.settings.config.read_text()
+                                    "config_source": (
+                                        (context or {})["_config_source"]
+                                        if "_config_source" in (context or {})
+                                        else self.settings.config.read_text()
+                                    )
                                     if isinstance(self.settings.config, Path)
                                     else None,
                                 }

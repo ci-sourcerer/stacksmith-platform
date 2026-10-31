@@ -197,6 +197,10 @@ def test_context_inspections_share_layered_inputs(
 def test_compound_review_authors_and_discovers_once_with_shared_inputs(
     context_runtime, monkeypatch
 ):
+    monkeypatch.setattr(
+        "stacksmith_platform.authoring_inspection._editing_context",
+        Mock(return_value=None),
+    )
     author = Mock(return_value=SimpleNamespace(source="name: draft\ncomponents: {}\n"))
     monkeypatch.setitem(
         sys.modules,

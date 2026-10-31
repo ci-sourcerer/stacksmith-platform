@@ -23,6 +23,7 @@ dependencies = [
   "kubernetes>=32,<36",
   "python-dotenv>=1,<2",
   "alembic>=1.18,<2",
+  "stacksmith @ git+https://github.com/ci-sourcerer/stacksmith@b113deb524078e31ce4dbc44ce3ce0f61411f32e",
 ]
 dynamic = ["version"]
 
@@ -71,6 +72,7 @@ args = [
   { name = "debug", options = ["--debug"], type = "boolean" },
   { name = "detach", options = ["--detach"], type = "boolean" },
   { name = "no_cache", options = ["--no-cache"], type = "boolean" },
+  { name = "no_rebuild", options = ["--no-rebuild"], type = "boolean" },
 ]
 
 [tool.poe.tasks.platform-image]
@@ -112,6 +114,9 @@ dirty = true
 
 [tool.uv]
 package = true
+
+[tool.hatch.metadata]
+allow-direct-references = true
 
 [dependency-groups]
 dev = ["common-python-tasks (>=0.12.1)"]

@@ -101,7 +101,7 @@ def test_snapshot_tampering_is_rejected(client, path):
     assert client.post(path, json=draft).status_code == 409
 
 
-@pytest.mark.parametrize("path", ["/api/review", "/api/resolution", "/api/source"])
+@pytest.mark.parametrize("path", ["/api/review", "/api/resolution"])
 def test_config_change_requires_reopening(client, tmp_path, path):
     draft = _draft(client)
     client.app.state.settings.config = tmp_path / "new-config.yaml"

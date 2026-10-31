@@ -15,7 +15,6 @@ import {
 } from "@xyflow/react";
 import { ComponentNode, type ComposerNode } from "./ComponentNode";
 import { RoutedEdge, type RoutedEdgeDefinition } from "./RoutedEdge";
-import { ManagedConnectionLoading } from "./ManagedConnectionLoading";
 import {
   automaticRoute,
   orthogonalRoute,
@@ -246,7 +245,7 @@ function Diagram(props: Props) {
 
   return (
     <div
-      className={`canvas ${props.readOnly ? "is-view-only" : ""} ${props.inspecting && !props.hasInspectedAssociations ? "is-loading-connections" : ""}`}
+      className={`canvas ${props.readOnly ? "is-view-only" : ""}`}
       aria-label="Stack diagram"
       onDragOver={(event) => {
         event.preventDefault();
@@ -313,7 +312,7 @@ function Diagram(props: Props) {
           maskColor="var(--minimap-mask, rgba(243,244,238,0.7))"
         />
         <Panel position="top-left">
-          <div className="canvas-label">
+          <div className="canvas-label" aria-live="polite">
             <span
               className={props.inspecting ? "status-dot pending" : "status-dot"}
             />
@@ -345,9 +344,6 @@ function Diagram(props: Props) {
           </div>
         </Panel>
       </ReactFlow>
-      {props.inspecting && !props.hasInspectedAssociations && (
-        <ManagedConnectionLoading />
-      )}
       <div className="canvas-legend">
         <div
           className={`legend ${props.selectedRelationship ? "has-selection" : ""}`}

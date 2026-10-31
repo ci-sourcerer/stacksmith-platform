@@ -1430,6 +1430,32 @@ it("changes inspection environment through Settings without reopening or rewriti
   ).toBe("");
 });
 
+it("prepares the first review while platform information is loading", async () => {
+  vi.useFakeTimers();
+  localStorage.setItem(workspaceKey(login), JSON.stringify(workspace));
+  const respond = vi.mocked(api).getMockImplementation()!;
+  let release!: (value: never) => void;
+  vi.mocked(api).mockImplementation((path, ...args) =>
+    path.startsWith("/platform")
+      ? (new Promise((resolve) => {
+          release = resolve;
+        }) as never)
+      : respond(path, ...args),
+  );
+  await render("/#/stacks/acme/service/stack.yaml");
+  await inspect();
+  expect(
+    vi.mocked(api).mock.calls.filter(([path]) => path === "/review"),
+  ).toHaveLength(1);
+  await act(async () => release((await respond("/platform")) as never));
+  await inspect();
+  expect(
+    vi.mocked(api).mock.calls.filter(([path]) => path === "/review"),
+  ).toHaveLength(1);
+  expect(
+    document.querySelector('button[aria-label="Add Service"]'),
+  ).toBeTruthy();
+});
 it("opens the canvas before review and uses its catalog without duplicate inspections", async () => {
   vi.useFakeTimers();
   localStorage.setItem(workspaceKey(login), JSON.stringify(workspace));
@@ -1501,7 +1527,13 @@ it("makes unchanged source available immediately and renders edits independently
   await inspect();
   expect(
     vi.mocked(api).mock.calls.filter(([path]) => path === "/source"),
+  ).toHaveLength(0);
+  await click("button", "Review changes");
+  await inspect();
+  expect(
+    vi.mocked(api).mock.calls.filter(([path]) => path === "/source"),
   ).toHaveLength(1);
+  await click("button", "Back to canvas");
   await click("button", "Test undo");
   await inspect();
   expect(
@@ -1510,49 +1542,27 @@ it("makes unchanged source available immediately and renders edits independently
   expect(document.querySelector(".unsaved")).toBeNull();
 });
 
-it("keeps authored connections visible before inspection and after inspection fails", async () => {
+it("keeps the editor read-only when the initial inspection fails", async () => {
   vi.useFakeTimers();
   initialComponents = { data: { type: "service" }, app: { type: "service" } };
   localStorage.setItem(workspaceKey(login), JSON.stringify(workspace));
   const respond = vi.mocked(api).getMockImplementation()!;
   vi.mocked(api).mockImplementation((path, ...args) =>
     path === "/review"
-      ? Promise.reject(
-          new ApiError("Inspection failed", 422, {
-            stage: "info associations",
-            code: "command_failed",
-            exit_code: 2,
-            stdout: "",
-            stderr: "Missing region",
-          }),
-        )
+      ? Promise.reject(new Error("Inspection failed"))
       : respond(path, ...args),
   );
   await render("/#/stacks/acme/service/stack.yaml");
   await click("button", "Test connect scalar");
   expect(
     document.querySelector('[data-testid="draft-edges"]')?.textContent,
-  ).toContain('"source":"data"');
-  expect(vi.mocked(api).mock.calls.some(([path]) => path === "/review")).toBe(
-    false,
-  );
+  ).toBe("[]");
   await act(async () => {
     vi.advanceTimersByTime(450);
   });
-  expect(
-    document.querySelector('[data-testid="draft-edges"]')?.textContent,
-  ).toContain('"source":"data"');
-  expect(document.body.textContent).toContain("Missing region");
-  await click("button", "Test undo");
-  expect(
-    document.querySelector('[data-testid="draft-edges"]')?.textContent,
-  ).toBe("[]");
-  await click("button", "Test redo");
-  expect(
-    document.querySelector('[data-testid="draft-edges"]')?.textContent,
-  ).toContain('"source":"data"');
+  expect(document.body.textContent).toContain("Inspection failed");
+  expect(document.body.textContent).toContain("Retry inspection");
 });
-
 it("chooses a nested destination and preserves sibling values", async () => {
   initialComponents = {
     data: { type: "service" },
@@ -1598,7 +1608,7 @@ it("inspects managed connections without a deployment environment", async () => 
     vi.advanceTimersByTime(450);
   });
   expect(vi.mocked(api).mock.calls.some(([path]) => path === "/source")).toBe(
-    true,
+    false,
   );
   expect(
     vi.mocked(api).mock.calls.find(([path]) => path === "/review")?.[1],
@@ -2129,7 +2139,7 @@ it("disconnects the receiving component in both roles, retains its sidebar and e
   expect(
     vi
       .mocked(api)
-      .mock.calls.filter(([path]) => path === "/source")
+      .mock.calls.filter(([path]) => path === "/review")
       .at(-1)?.[1],
   ).toMatchObject({
     disabled_associations: [],
@@ -3102,7 +3112,7 @@ it("renames a component, preserves layout and references, and supports undo and 
   expect(
     vi
       .mocked(api)
-      .mock.calls.filter(([path]) => path === "/source")
+      .mock.calls.filter(([path]) => path === "/review")
       .at(-1)?.[1],
   ).toMatchObject({
     components: {
