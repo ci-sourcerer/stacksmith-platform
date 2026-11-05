@@ -96,9 +96,7 @@ class DeploymentDiscoveryInput(Input):
     """Repository deployment discovery options."""
 
     gitops_root: str | None = None
-    discovery_mode: Literal["auto", "single", "folders", "flat-files", "env-files"] = (
-        "auto"
-    )
+    discovery_mode: Literal["auto", "single", "folders", "env-files"] = "auto"
 
     @field_validator("gitops_root")
     @classmethod
@@ -111,9 +109,7 @@ class DeploymentConfigurationInput(Input):
 
     revision: str = Field(pattern=r"^[0-9a-f]{40}$")
     gitops_root: str = ""
-    discovery_mode: Literal["auto", "single", "folders", "flat-files", "env-files"] = (
-        "auto"
-    )
+    discovery_mode: Literal["auto", "single", "folders", "env-files"] = "auto"
     lock_key: str = Field(default="", max_length=200)
     locked: bool
     automatic: bool
@@ -144,9 +140,7 @@ class EnvironmentInput(Input):
 
     name: str = Field(default="default", pattern=r"^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$")
     gitops_root: str = "."
-    discovery_mode: Literal["auto", "single", "folders", "flat-files", "env-files"] = (
-        "auto"
-    )
+    discovery_mode: Literal["auto", "single", "folders", "env-files"] = "auto"
     lock_key: str = Field(default="", max_length=200)
     locked: bool = True
     automatic: bool = True

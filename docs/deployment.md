@@ -179,3 +179,9 @@ Installation links use the configured App identity. For authoring deployments wi
 Run the existing schema initialization command before starting updated API and worker processes. The upgrade adds GitHub repository IDs and a deployment activation flag. Existing repository records keep deployments enabled; new discovery records start disabled. Settings and grants follow repository renames by GitHub ID. Revoked repositories retain their settings for restoration.
 
 See [database migrations](database-migrations.md) for migration authoring, debug Adminer, drift checks, and the fresh-baseline transition.
+
+## Repository layouts
+
+Use Single deployment (`single`), Environment files (`env-files`), or Environment directories (`folders`). Automatic discovery rejects mixed environment-file and environment-directory layouts; select an explicit mode or reorganize the repository. Obsolete mode values must be replaced in Deployment settings before execution. Platform still configures one root per repository.
+
+Follow [the application example](https://github.com/ci-sourcerer/stacksmith-example-app) for deployment onboarding and its pinned [managed configuration](https://github.com/ci-sourcerer/stacksmith-example-platform). The bundled Lambda example demonstrates Composer authoring and policy, independently of deployment setup.

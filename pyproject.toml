@@ -23,7 +23,7 @@ dependencies = [
   "kubernetes>=32,<36",
   "python-dotenv>=1,<2",
   "alembic>=1.18,<2",
-  "stacksmith @ git+https://github.com/ci-sourcerer/stacksmith@b113deb524078e31ce4dbc44ce3ce0f61411f32e",
+  "stacksmith @ git+https://github.com/ci-sourcerer/stacksmith@d9f516984f5fffc388d31c0950a41b521602dec2",
 ]
 dynamic = ["version"]
 

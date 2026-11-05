@@ -1542,8 +1542,8 @@ wheels = [
 
 [[package]]
 name = "stacksmith"
-version = "0.0.0.post1.dev0+b113deb"
-source = { git = "https://github.com/ci-sourcerer/stacksmith?rev=b113deb524078e31ce4dbc44ce3ce0f61411f32e#b113deb524078e31ce4dbc44ce3ce0f61411f32e" }
+version = "0.0.0.post5.dev0+d9f5169"
+source = { git = "https://github.com/ci-sourcerer/stacksmith?rev=d9f516984f5fffc388d31c0950a41b521602dec2#d9f516984f5fffc388d31c0950a41b521602dec2" }
 dependencies = [
     { name = "cryptography" },
     { name = "deepmerge" },
@@ -1616,7 +1616,7 @@ requires-dist = [
     { name = "python-dotenv", specifier = ">=1,<2" },
     { name = "ruamel-yaml", specifier = ">=0.18,<0.19" },
     { name = "sqlalchemy", specifier = ">=2.0,<3" },
-    { name = "stacksmith", git = "https://github.com/ci-sourcerer/stacksmith?rev=b113deb524078e31ce4dbc44ce3ce0f61411f32e" },
+    { name = "stacksmith", git = "https://github.com/ci-sourcerer/stacksmith?rev=d9f516984f5fffc388d31c0950a41b521602dec2" },
     { name = "uvicorn", extras = ["standard"], specifier = ">=0.34,<1" },
 ]
 
