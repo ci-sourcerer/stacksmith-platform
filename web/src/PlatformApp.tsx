@@ -2044,8 +2044,7 @@ function deploymentModeLabel(mode: string) {
   return (
     {
       single: "Single deployment",
-      folders: "Environment folders",
-      "flat-files": "Environment files in one directory",
+      folders: "Environment directories",
       "env-files": "Environment files",
     }[mode] ?? mode
   );
@@ -2330,10 +2329,7 @@ function DeploymentSetup({
                   >
                     <option value="auto">Detect automatically</option>
                     <option value="single">Single deployment</option>
-                    <option value="folders">Environment folders</option>
-                    <option value="flat-files">
-                      Environment files in one directory
-                    </option>
+                    <option value="folders">Environment directories</option>
                     <option value="env-files">Environment files</option>
                   </select>
                 </SettingsField>
@@ -2444,10 +2440,7 @@ function DeploymentSetup({
                   >
                     <option value="auto">Detect automatically</option>
                     <option value="single">Single deployment</option>
-                    <option value="folders">Environment folders</option>
-                    <option value="flat-files">
-                      Environment files in one directory
-                    </option>
+                    <option value="folders">Environment directories</option>
                     <option value="env-files">Environment files</option>
                   </select>
                 </SettingsField>

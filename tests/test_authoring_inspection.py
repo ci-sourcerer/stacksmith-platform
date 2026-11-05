@@ -129,7 +129,7 @@ def test_environment_inputs_substitute_draft_without_changing_stack_layer_order(
     )
 
 
-@pytest.mark.parametrize("mode", ["single", "folders", "flat-files", "env-files"])
+@pytest.mark.parametrize("mode", ["single", "folders", "env-files"])
 def test_inspection_uses_selected_discovery_mode(context_runtime, mode):
     context_runtime.inspection["context"]["settings"]["discovery_mode"] = mode
     if mode == "single":
